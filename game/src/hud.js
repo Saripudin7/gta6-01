@@ -1,5 +1,6 @@
-// HUD and menus: minimap, wanted stars, money, health, speed, mission
-// tracker, toasts, and the title / pause / busted / wasted screens.
+// HUD and menus: live minimap, wanted stars, money, health, ammo,
+// speedometer, objective tracker, toasts, and the title / how-to /
+// pause / mission-list / busted / wasted / complete screens.
 import { VIEW_W, VIEW_H, WORLD_W, WORLD_H, GAME_TITLE, GAME_SUBTITLE, MISSION_DEFS } from './config.js';
 import { clamp } from './random.js';
 import { missionObjectiveText } from './missions.js';
@@ -27,13 +28,6 @@ function panel(g, x, y, w, h, alpha = 0.72) {
   g.stroke();
 }
 
-function drawStars(g, x, y, stars) {
-  for (let i = 0; i < 5; i++) {
-    g.fillStyle = i < stars ? '#ffd34d' : 'rgba(255,255,255,0.25)';
-    drawStar(g, x + i * 26, y, 11);
-  }
-}
-
 function drawStar(g, cx, cy, r) {
   g.beginPath();
   for (let i = 0; i < 10; i++) {
@@ -48,11 +42,35 @@ function drawStar(g, cx, cy, r) {
   g.fill();
 }
 
+function drawStars(g, x, y, stars) {
+  for (let i = 0; i < 5; i++) {
+    g.fillStyle = i < stars ? '#ffd34d' : 'rgba(255,255,255,0.25)';
+    drawStar(g, x + i * 26, y, 11);
+  }
+}
+
+function menuButton(g, b, input, labelSize = 19) {
+  const hover =
+    input.mouse.x > b.x && input.mouse.x < b.x + b.w && input.mouse.y > b.y && input.mouse.y < b.y + b.h;
+  g.fillStyle = hover ? '#ffd34d' : 'rgba(10,12,16,0.8)';
+  g.beginPath();
+  g.roundRect(b.x, b.y, b.w, b.h, 12);
+  g.fill();
+  g.strokeStyle = hover ? '#fff' : 'rgba(255,255,255,0.4)';
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = hover ? '#1a1a1a' : '#fff';
+  g.font = `bold ${labelSize}px sans-serif`;
+  g.textAlign = 'center';
+  g.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 7);
+  g.textAlign = 'left';
+}
+
 export function renderHUD(ctx, state, input) {
   const g = ctx;
   const p = state.player;
 
-  // --- Top-left: mission objective -----------------------------------------
+  // Top-left: the current objective.
   const objective = missionObjectiveText(state);
   g.font = 'bold 15px sans-serif';
   const ow = Math.min(560, g.measureText(objective).width + 28);
@@ -63,7 +81,7 @@ export function renderHUD(ctx, state, input) {
   g.font = '14px sans-serif';
   g.fillText(objective.slice(0, 72), 46, 43);
 
-  // --- Top-right: money, wanted, health, ammo ------------------------------
+  // Top-right: money, wanted stars, health and ammo.
   panel(g, VIEW_W - 264, 14, 250, 96);
   g.fillStyle = '#2ecc71';
   g.font = 'bold 22px sans-serif';
@@ -71,7 +89,6 @@ export function renderHUD(ctx, state, input) {
   g.fillText(`$${state.money.toLocaleString('en-US')}`, VIEW_W - 30, 42);
   g.textAlign = 'left';
   drawStars(g, VIEW_W - 252, 62, state.wantedStars);
-  // Health bar.
   g.fillStyle = 'rgba(255,255,255,0.2)';
   g.fillRect(VIEW_W - 252, 78, 150, 10);
   g.fillStyle = p.health > 40 ? '#2ecc71' : '#e74c3c';
@@ -84,7 +101,7 @@ export function renderHUD(ctx, state, input) {
   g.fillStyle = '#fff';
   g.fillText('M — missions   P — pause', VIEW_W - 252, 104);
 
-  // --- Bottom-left: minimap -------------------------------------------------
+  // Bottom-left: the live minimap.
   panel(g, 14, VIEW_H - MAP_H - 26, MAP_W + 12, MAP_H + 12, 0.85);
   g.save();
   g.beginPath();
@@ -95,7 +112,6 @@ export function renderHUD(ctx, state, input) {
   const sy = MAP_H / WORLD_H;
   const mx0 = 20;
   const my0 = VIEW_H - MAP_H - 20;
-  // Mission target blip.
   if (state.missions.target) {
     const t = state.missions.target;
     g.fillStyle = '#ffd34d';
@@ -106,7 +122,6 @@ export function renderHUD(ctx, state, input) {
     g.lineWidth = 2;
     g.stroke();
   }
-  // Police blips.
   for (const car of state.cars) {
     if (!car.police) continue;
     g.fillStyle = Math.sin(state.time * 8) > 0 ? '#ff2d2d' : '#2d6bff';
@@ -114,11 +129,8 @@ export function renderHUD(ctx, state, input) {
     g.arc(mx0 + car.x * sx, my0 + car.y * sy, 4, 0, Math.PI * 2);
     g.fill();
   }
-  // Player arrow.
-  const px = mx0 + p.x * sx;
-  const py = my0 + p.y * sy;
   g.save();
-  g.translate(px, py);
+  g.translate(mx0 + p.x * sx, my0 + p.y * sy);
   g.rotate(p.angle);
   g.fillStyle = '#fff';
   g.beginPath();
@@ -136,7 +148,7 @@ export function renderHUD(ctx, state, input) {
   g.font = 'bold 12px sans-serif';
   g.fillText('SOLMAR BAY', 22, VIEW_H - MAP_H - 32);
 
-  // --- Bottom-right: speed / controls ---------------------------------------
+  // Bottom-right: speedometer in a car, controls on foot.
   if (p.inCar && p.car) {
     const kmh = Math.round(Math.abs(p.car.speed) * 0.36);
     panel(g, VIEW_W - 190, VIEW_H - 84, 176, 70);
@@ -162,7 +174,7 @@ export function renderHUD(ctx, state, input) {
     g.fillText('E — steal car / use shop', VIEW_W - 238, VIEW_H - 24);
   }
 
-  // --- Shop prompt ------------------------------------------------------------
+  // Shop prompt, centred above the bottom edge.
   const shop = nearShop(state);
   if (shop && !p.inCar) {
     const text = shopPrompt(state, shop);
@@ -175,7 +187,7 @@ export function renderHUD(ctx, state, input) {
     g.textAlign = 'left';
   }
 
-  // --- Crime flash --------------------------------------------------------------
+  // Crime flash under the top bar.
   if (state.crimeFlash > 0 && state.lastCrime) {
     g.globalAlpha = Math.min(1, state.crimeFlash);
     g.fillStyle = '#ff6b5e';
@@ -186,7 +198,7 @@ export function renderHUD(ctx, state, input) {
     g.globalAlpha = 1;
   }
 
-  // --- Mission banner -------------------------------------------------------------
+  // Mission banner.
   const m = state.missions;
   if (m.bannerTimer > 0 && m.banner) {
     g.globalAlpha = Math.min(1, m.bannerTimer);
@@ -200,7 +212,7 @@ export function renderHUD(ctx, state, input) {
     g.globalAlpha = 1;
   }
 
-  // --- Toasts -----------------------------------------------------------------------
+  // Toasts, stacked above the bottom edge.
   let ty = VIEW_H - 190;
   for (const toast of state.toasts) {
     g.globalAlpha = Math.min(1, toast.life);
@@ -215,7 +227,7 @@ export function renderHUD(ctx, state, input) {
     g.globalAlpha = 1;
   }
 
-  // --- Crosshair ----------------------------------------------------------------------
+  // Crosshair on foot.
   if (p.onFoot) {
     g.strokeStyle = 'rgba(255,255,255,0.9)';
     g.lineWidth = 2;
@@ -237,10 +249,9 @@ export function renderHUD(ctx, state, input) {
   }
 }
 
-// --- Menus -----------------------------------------------------------------------------
+// --- Menus ---------------------------------------------------------------
 
 function drawTitleBackdrop(g, state) {
-  // A warm sunset gradient behind the menu, with the city minimap as a motif.
   const grad = g.createLinearGradient(0, 0, 0, VIEW_H);
   grad.addColorStop(0, '#ff9a5a');
   grad.addColorStop(0.55, '#e86a6a');
@@ -274,28 +285,15 @@ export function renderTitle(ctx, state, input) {
   const bw = 320;
   const bx = (VIEW_W - bw) / 2;
   let by = 350;
-  const hasSave = !!state.save;
   buttons.push({ id: 'new', label: '▶  NEW GAME', x: bx, y: by, w: bw, h: 52 });
   by += 64;
-  if (hasSave) {
+  if (state.save) {
     buttons.push({ id: 'continue', label: '↻  CONTINUE', x: bx, y: by, w: bw, h: 52 });
     by += 64;
   }
   buttons.push({ id: 'how', label: '?  HOW TO PLAY', x: bx, y: by, w: bw, h: 52 });
   state.ui.buttons = buttons;
-  for (const b of buttons) {
-    const hover = input.mouse.x > b.x && input.mouse.x < b.x + b.w && input.mouse.y > b.y && input.mouse.y < b.y + b.h;
-    g.fillStyle = hover ? '#ffd34d' : 'rgba(10,12,16,0.8)';
-    g.beginPath();
-    g.roundRect(b.x, b.y, b.w, b.h, 12);
-    g.fill();
-    g.strokeStyle = hover ? '#fff' : 'rgba(255,255,255,0.4)';
-    g.lineWidth = 2;
-    g.stroke();
-    g.fillStyle = hover ? '#1a1a1a' : '#fff';
-    g.font = 'bold 19px sans-serif';
-    g.fillText(b.label, VIEW_W / 2, b.y + 34);
-  }
+  for (const b of buttons) menuButton(g, b, input);
   g.font = '13px sans-serif';
   g.fillStyle = 'rgba(255,255,255,0.85)';
   g.fillText('WASD move / drive  •  E steal car & use shops  •  Mouse aim, click shoot  •  M missions  •  P pause', VIEW_W / 2, VIEW_H - 44);
@@ -329,14 +327,7 @@ export function renderHowTo(ctx, state, input) {
   lines.forEach((line, i) => g.fillText(line, VIEW_W / 2, 160 + i * 28));
   const b = { id: 'back', label: '←  BACK', x: (VIEW_W - 220) / 2, y: 560, w: 220, h: 50 };
   state.ui.buttons = [b];
-  const hover = input.mouse.x > b.x && input.mouse.x < b.x + b.w && input.mouse.y > b.y && input.mouse.y < b.y + b.h;
-  g.fillStyle = hover ? '#ffd34d' : 'rgba(10,12,16,0.8)';
-  g.beginPath();
-  g.roundRect(b.x, b.y, b.w, b.h, 12);
-  g.fill();
-  g.fillStyle = hover ? '#1a1a1a' : '#fff';
-  g.font = 'bold 18px sans-serif';
-  g.fillText(b.label, VIEW_W / 2, b.y + 33);
+  menuButton(g, b, input, 18);
   g.textAlign = 'left';
 }
 
@@ -363,16 +354,7 @@ export function renderPause(ctx, state, input) {
     by += 60;
   }
   state.ui.buttons = buttons;
-  for (const b of buttons) {
-    const hover = input.mouse.x > b.x && input.mouse.x < b.x + b.w && input.mouse.y > b.y && input.mouse.y < b.y + b.h;
-    g.fillStyle = hover ? '#ffd34d' : 'rgba(255,255,255,0.12)';
-    g.beginPath();
-    g.roundRect(b.x, b.y, b.w, b.h, 12);
-    g.fill();
-    g.fillStyle = hover ? '#1a1a1a' : '#fff';
-    g.font = 'bold 18px sans-serif';
-    g.fillText(b.label, VIEW_W / 2, b.y + 31);
-  }
+  for (const b of buttons) menuButton(g, b, input, 18);
   g.font = '14px sans-serif';
   g.fillStyle = '#ccc';
   g.fillText(`Money $${state.money}   •   Missions done ${state.missions.done.length}/5   •   Cars stolen ${state.stats.carsStolen}`, VIEW_W / 2, VIEW_H - 40);
@@ -417,16 +399,7 @@ export function renderMissionList(ctx, state, input) {
   });
   const back = { id: 'back', label: '←  BACK', x: (VIEW_W - 220) / 2, y: y + 20, w: 220, h: 50 };
   buttons.push(back);
-  const hover = input.mouse.x > back.x && input.mouse.x < back.x + back.w && input.mouse.y > back.y && input.mouse.y < back.y + back.h;
-  g.fillStyle = hover ? '#ffd34d' : 'rgba(255,255,255,0.14)';
-  g.beginPath();
-  g.roundRect(back.x, back.y, back.w, back.h, 12);
-  g.fill();
-  g.fillStyle = hover ? '#1a1a1a' : '#fff';
-  g.font = 'bold 18px sans-serif';
-  g.textAlign = 'center';
-  g.fillText(back.label, VIEW_W / 2, back.y + 33);
-  g.textAlign = 'left';
+  menuButton(g, back, input, 18);
   state.ui.buttons = buttons;
 }
 
@@ -451,16 +424,16 @@ export function renderEndScreen(ctx, state, input, kind) {
     g.fillText(`You pulled off the Bayfront Job and own this city. Final take: $${state.money}.`, VIEW_W / 2, 320);
     g.fillText(`Missions done: 5/5   •   Cars stolen: ${state.stats.carsStolen}   •   Rivals down: ${state.stats.kills}`, VIEW_W / 2, 352);
   }
-  const b = { id: 'respawn', label: isComplete ? '↻  KEEP PLAYING (FREE ROAM)' : '↻  RESPAWN AT THE SAFEHOUSE', x: (VIEW_W - 380) / 2, y: 400, w: 380, h: 54 };
+  const b = {
+    id: 'respawn',
+    label: isComplete ? '↻  KEEP PLAYING (FREE ROAM)' : '↻  RESPAWN AT THE SAFEHOUSE',
+    x: (VIEW_W - 380) / 2,
+    y: 400,
+    w: 380,
+    h: 54,
+  };
   state.ui.buttons = [b];
-  const hover = input.mouse.x > b.x && input.mouse.x < b.x + b.w && input.mouse.y > b.y && input.mouse.y < b.y + b.h;
-  g.fillStyle = hover ? '#ffd34d' : 'rgba(255,255,255,0.14)';
-  g.beginPath();
-  g.roundRect(b.x, b.y, b.w, b.h, 12);
-  g.fill();
-  g.fillStyle = hover ? '#1a1a1a' : '#fff';
-  g.font = 'bold 18px sans-serif';
-  g.fillText(b.label, VIEW_W / 2, b.y + 35);
+  menuButton(g, b, input, 18);
   g.font = '14px sans-serif';
   g.fillStyle = '#ccc';
   g.fillText('or press Enter', VIEW_W / 2, b.y + 84);

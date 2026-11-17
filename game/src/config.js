@@ -1,13 +1,18 @@
-// Solmar Bay — configuration and constants for the open-world crime game.
-// Everything here is original: a fictional sun-soaked coastal city.
+// Solmar Bay — world constants, places, cars and the story.
+// A fictional sun-soaked coastal city. Everything here is original:
+// no names, art or maps from any commercial game.
 export const WORLD_W = 3200;
 export const WORLD_H = 2400;
-export const ROAD_W = 76; // road width in world px
-export const BLOCK = 400; // grid pitch: road + block
+export const ROAD_W = 76;
+export const BLOCK = 400;
 export const VIEW_W = 1280;
 export const VIEW_H = 720;
 
-// Colours — a warm, sun-soaked palette: sand, teal sea, terracotta roofs.
+export const GAME_TITLE = 'SOLMAR BAY';
+export const GAME_SUBTITLE = 'Streets of Gold';
+export const SAVE_KEY = 'solmar-bay-save-v1';
+
+// Warm coastal palette: sand, teal sea, terracotta roofs.
 export const PALETTE = {
   grass: '#7fae5a',
   grassDark: '#6f9d4e',
@@ -18,23 +23,19 @@ export const PALETTE = {
   roadEdge: '#2c2a29',
   sidewalk: '#b9b3a4',
   lane: '#e8d44d',
-  buildingRoof: ['#c96f4a', '#b85c3e', '#d99a5b', '#8fa3b8', '#a87c5f', '#7d9b76'],
-  buildingWall: '#e8ddc9',
   park: '#5d9b4a',
   plaza: '#cbb98f',
+  roofs: ['#c96f4a', '#b85c3e', '#d99a5b', '#8fa3b8', '#a87c5f', '#7d9b76'],
 };
 
-export const GAME_TITLE = 'SOLMAR BAY';
-export const GAME_SUBTITLE = 'Streets of Gold';
-
-// Named places in the city (all original names).
+// Named places, all invented for this game.
 export const PLACES = {
   safehouse: { name: 'Safehouse', x: 560, y: 560 },
   paintShop: { name: 'Paint & Repair', x: 2440, y: 560 },
   pier: { name: 'Old Pier', x: 600, y: 2130 },
   docks: { name: 'North Docks', x: 2760, y: 320 },
   bank: { name: 'Bayfront Bank', x: 1640, y: 1240 },
-  carLot: { name: 'Rico\'s Motors', x: 1240, y: 2040 },
+  carLot: { name: "Rico's Motors", x: 1240, y: 2040 },
   gunShop: { name: 'Harbor Arms', x: 2040, y: 1640 },
   hospital: { name: 'St. Marina Hospital', x: 840, y: 1640 },
   club: { name: 'Club Neon', x: 2440, y: 1240 },
@@ -60,7 +61,7 @@ export const MISSION_DEFS = [
   {
     id: 'the-pickup',
     title: 'Mission 2 — The Pickup',
-    brief: 'A package is waiting at the Old Pier. Go on foot or by car, pick it up and bring it back to the Safehouse.',
+    brief: 'A package is waiting at the Old Pier. Pick it up and bring it back to the Safehouse.',
     payout: 400,
   },
   {
@@ -82,5 +83,3 @@ export const MISSION_DEFS = [
     payout: 1500,
   },
 ];
-
-export const SAVE_KEY = 'solmar-bay-save-v1';

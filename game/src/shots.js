@@ -1,14 +1,14 @@
 // Screenshot scenes behind ?shot=start|drive|chase|foot (with &seed=N).
 // Each one plays the real game forward from a staged state — the same code
-// the player runs — then paints it twice and sets window.__shotReady.
+// the player runs — then paints twice and sets window.__shotReady.
 import { PLACES } from './config.js';
-import { makeCar } from './vehicles.js';
-import { spawnPolice } from './vehicles.js';
+import { makeCar, spawnPolice } from './vehicles.js';
 import { startMission } from './missions.js';
 
 export function stageShot(state, shot) {
   const p = state.player;
-  const setCar = (modelId, x, y, angle, speed) => {
+
+  const putPlayerInCar = (modelId, x, y, angle, speed) => {
     const car = makeCar(modelId, x, y, angle, {});
     car.speed = speed;
     state.cars.push(car);
@@ -35,22 +35,17 @@ export function stageShot(state, shot) {
   p.ammo = 48;
 
   if (shot === 'drive') {
-    // Downtown cruise: traffic and pedestrians around, mission marker ahead.
-    setCar('coupe', 1600, 1200, 0, 260);
+    // Downtown cruise with traffic and pedestrians around, a marker ahead.
+    putPlayerInCar('coupe', 1600, 1200, 0, 260);
     state.missions.index = 1;
     startMission(state, 1);
-    state.missions.bannerTimer = 0;
-    state.toasts = [];
   } else if (shot === 'chase') {
-    // The cover: a police chase at 3 stars, sports car, sirens behind.
-    setCar('sport', 1700, 1200, 0, 420);
+    // The cover: a 3-star police chase in the sports car, sirens behind.
+    putPlayerInCar('sport', 1700, 1200, 0, 420);
     state.missions.index = 2;
     startMission(state, 2);
     state.heat = 3;
     state.wantedStars = 3;
-    state.missions.bannerTimer = 0;
-    state.toasts = [];
-    // A couple of cruisers trailing behind the player for the shot.
     const c1 = spawnPolice(state, 1420, 1200);
     c1.angle = 0;
     c1.speed = 380;
@@ -58,8 +53,7 @@ export function stageShot(state, shot) {
     c2.angle = 0;
     c2.speed = 360;
   } else if (shot === 'foot') {
-    // On foot at the pier, pistol out, mission marker on the package.
-    // Spawn outside the pickup radius so the package is still waiting.
+    // On foot at the pier, pistol out, the package marker in view.
     p.x = 700;
     p.y = 2050;
     p.onFoot = true;
@@ -68,16 +62,12 @@ export function stageShot(state, shot) {
     p.aimAngle = Math.atan2(PLACES.pier.y - p.y, PLACES.pier.x - p.x);
     state.missions.index = 1;
     startMission(state, 1);
-    state.missions.bannerTimer = 0;
-    state.toasts = [];
   } else {
-    // Default: free-roam drive.
-    setCar('sedan', 1240, 840, Math.PI / 2, 200);
+    putPlayerInCar('sedan', 1240, 840, Math.PI / 2, 200);
   }
 
-  // Step the simulation forward so traffic, peds and police settle into
-  // natural positions before the screenshot. Driving shots hold the throttle
-  // so the car is moving and the police trail behind it.
+  // Step the simulation so traffic, peds and police settle into natural
+  // positions. Driving shots hold the throttle so the car is moving.
   const driving = shot === 'drive' || shot === 'chase';
   const driveInput = {
     keys: driving ? new Set(['up']) : new Set(),
@@ -85,10 +75,11 @@ export function stageShot(state, shot) {
   };
   const steps = shot === 'chase' ? 60 : 90;
   for (let i = 0; i < steps; i++) state.step(1 / 60, driveInput, new Set());
+  state.missions.bannerTimer = 0;
   state.crimeFlash = 0;
   state.toasts = [];
   if (shot === 'foot') {
-    // The warm-up mouse is at screen centre, which overwrites the aim; point
+    // The warm-up mouse sat at screen centre and overwrote the aim; point
     // the pistol at the pier package again for the shot.
     p.aimAngle = Math.atan2(PLACES.pier.y - p.y, PLACES.pier.x - p.x);
   }

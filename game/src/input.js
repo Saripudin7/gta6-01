@@ -1,19 +1,11 @@
-// Keyboard and mouse input. Held keys give a direction; one-shot presses
-// (interact, pause, shoot) are consumed once per frame.
-export const ACTION = {
-  INTERACT: 1,
-  SHOOT: 2,
-  PAUSE: 4,
-  MUTE: 8,
-  MISSION: 16,
-};
-
+// Keyboard + mouse input. Held keys steer and drive; one-shot actions
+// (interact, pause, mission list, mute) are consumed once per frame by
+// the game loop so a single keypress never fires twice.
 export function createInput(canvas) {
   const input = {
     keys: new Set(),
     pressed: new Set(),
     mouse: { x: 0, y: 0, down: false, clicked: false },
-    wheel: 0,
   };
 
   const KEYMAP = {
@@ -34,48 +26,57 @@ export function createInput(canvas) {
     Escape: 'pause',
     KeyM: 'mission',
     KeyN: 'mute',
-    KeyR: 'respawn',
     Enter: 'enter',
   };
 
-  window.addEventListener('keydown', (e) => {
-    const action = KEYMAP[e.code];
+  window.addEventListener('keydown', (event) => {
+    const action = KEYMAP[event.code];
     if (!action) return;
-    if (['up', 'down', 'left', 'right', 'brake'].includes(action)) e.preventDefault();
-    if (!e.repeat) {
-      input.keys.add(action);
-      input.pressed.add(action);
+    if (action === 'up' || action === 'down' || action === 'left' || action === 'right' || action === 'brake') {
+      event.preventDefault();
     }
+    if (event.repeat) return;
+    input.keys.add(action);
+    input.pressed.add(action);
   });
-  window.addEventListener('keyup', (e) => {
-    const action = KEYMAP[e.code];
+
+  window.addEventListener('keyup', (event) => {
+    const action = KEYMAP[event.code];
     if (action) input.keys.delete(action);
   });
-  window.addEventListener('blur', () => input.keys.clear());
 
-  canvas.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    input.mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    input.mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  window.addEventListener('blur', () => {
+    input.keys.clear();
   });
-  canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) {
+
+  canvas.addEventListener('mousemove', (event) => {
+    const rect = canvas.getBoundingClientRect();
+    input.mouse.x = (event.clientX - rect.left) * (canvas.width / rect.width);
+    input.mouse.y = (event.clientY - rect.top) * (canvas.height / rect.height);
+  });
+
+  canvas.addEventListener('mousedown', (event) => {
+    if (event.button === 0) {
       input.mouse.down = true;
       input.mouse.clicked = true;
     }
   });
+
   window.addEventListener('mouseup', () => {
     input.mouse.down = false;
   });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
   input.consumePressed = function consumePressed() {
-    const p = input.pressed;
+    const snapshot = input.pressed;
     input.pressed = new Set();
-    return p;
+    return snapshot;
   };
+
   input.endFrame = function endFrame() {
     input.mouse.clicked = false;
   };
+
   return input;
 }

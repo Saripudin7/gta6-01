@@ -1,18 +1,18 @@
 // Solmar Bay — an original open-world crime game.
-// Bootstrap, game loop, state, menus and save wiring. All systems live in
-// their own modules: city, vehicles, pedestrians, police, player, missions,
-// economy, render, hud, audio and save.
+// Bootstrap, game loop, state, menus and save wiring. Each system lives
+// in its own module: city, vehicles, pedestrians, police, player,
+// missions, economy, render, hud, audio and save.
 import { WORLD_W, WORLD_H, VIEW_W, VIEW_H, PLACES, MISSION_DEFS } from './config.js';
 import { makeRng } from './random.js';
 import { createInput } from './input.js';
 import { createAudio } from './audio.js';
 import { generateCity, renderCityBackground } from './city.js';
 import { createCamera, updateCamera, renderWorld } from './render.js';
-import { createPlayer, updatePlayer, exitCar } from './player.js';
+import { createPlayer, updatePlayer } from './player.js';
 import { spawnTraffic, spawnParkedCars, updateAllCars, makeCar } from './vehicles.js';
 import { spawnPedestrians, updatePedestrians } from './pedestrians.js';
 import { createWantedSystem, updateWanted, syncPolice } from './police.js';
-import { createMissionState, startMission, updateMissions, updateBullets, retryMission } from './missions.js';
+import { createMissionState, startMission, updateMissions, updateBullets } from './missions.js';
 import { nearShop, tryShop } from './economy.js';
 import { saveGame, loadGame, clearSave } from './save.js';
 import { createMinimap, renderHUD, renderTitle, renderHowTo, renderPause, renderMissionList, renderEndScreen } from './hud.js';
@@ -29,7 +29,7 @@ function newState() {
   const state = {
     time: 0,
     mode: 'title',
-    prevMode: 'playing',
+    prevMode: 'title',
     money: 150,
     ownedModels: [],
     ownedCars: [],
@@ -64,7 +64,8 @@ function newState() {
       const a = state.rng() * Math.PI * 2;
       const sp = 40 + state.rng() * 120;
       state.particles.push({
-        x, y,
+        x,
+        y,
         vx: Math.cos(a) * sp,
         vy: Math.sin(a) * sp,
         life: 0.5 + state.rng() * 0.4,
@@ -74,19 +75,22 @@ function newState() {
       });
     }
   };
+
   state.showToast = function showToast(text) {
     state.toasts.push({ text, life: 3 });
     if (state.toasts.length > 4) state.toasts.shift();
   };
+
   state.saveGame = function saveGameNow() {
     return saveGame(state);
   };
+
   return state;
 }
 
 const state = newState();
 
-// --- world setup ---------------------------------------------------------------
+// --- world setup ---------------------------------------------------------
 
 function populateWorld() {
   state.cars = [];
@@ -97,10 +101,16 @@ function populateWorld() {
   spawnTraffic(state, 26);
   spawnParkedCars(state, 14);
   spawnPedestrians(state, 60);
-  // A few cash/health/ammo pickups scattered around the city.
+  // Cash, health and ammo pickups scattered around the city.
   const rng = state.rng;
   for (let i = 0; i < 6; i++) {
-    state.pickups.push({ x: rng() * (WORLD_W - 200) + 100, y: rng() * (WORLD_H - 200) + 100, kind: 'cash', amount: 25 + Math.floor(rng() * 4) * 25, dead: false });
+    state.pickups.push({
+      x: rng() * (WORLD_W - 200) + 100,
+      y: rng() * (WORLD_H - 200) + 100,
+      kind: 'cash',
+      amount: 25 + Math.floor(rng() * 4) * 25,
+      dead: false,
+    });
   }
   state.pickups.push({ x: PLACES.hospital.x + 60, y: PLACES.hospital.y, kind: 'health', dead: false });
   state.pickups.push({ x: PLACES.gunShop.x - 60, y: PLACES.gunShop.y, kind: 'ammo', dead: false });
@@ -177,7 +187,7 @@ function respawn() {
   state.audio.click();
 }
 
-// --- per-frame update -------------------------------------------------------------
+// --- per-frame update ------------------------------------------------------
 
 function updateParticles(dt) {
   for (const pt of state.particles) {
@@ -202,7 +212,6 @@ state.step = function step(dt, input, pressed) {
   updateBullets(state, dt);
   updateParticles(dt);
   updateCamera(state, dt);
-  // Siren while any cruiser is out.
   if (state.cars.some((c) => c.police)) state.audio.siren(dt);
 };
 
@@ -210,14 +219,13 @@ function update(dt) {
   const input = state.input;
   const pressed = input.consumePressed();
 
-  // Global: mute toggle.
   if (pressed.has('mute')) {
     state.audio.ensure();
     const muted = state.audio.toggleMute();
     state.showToast(muted ? 'Sound muted' : 'Sound on');
   }
 
-  // Menu button clicks (only outside gameplay — playing has no buttons).
+  // Menu button clicks (playing has no buttons).
   if (input.mouse.clicked && state.mode !== 'playing') {
     const b = state.ui.buttons.find(
       (btn) => input.mouse.x >= btn.x && input.mouse.x <= btn.x + btn.w && input.mouse.y >= btn.y && input.mouse.y <= btn.y + btn.h,
@@ -229,9 +237,7 @@ function update(dt) {
     if (pressed.has('enter')) startNewGame();
     return;
   }
-  if (state.mode === 'howto') {
-    return;
-  }
+  if (state.mode === 'howto') return;
   if (state.mode === 'paused') {
     if (pressed.has('pause') || pressed.has('enter')) {
       state.mode = 'playing';
@@ -240,9 +246,7 @@ function update(dt) {
     return;
   }
   if (state.mode === 'missions') {
-    if (pressed.has('pause') || pressed.has('mission')) {
-      state.mode = state.prevMode;
-    }
+    if (pressed.has('pause') || pressed.has('mission')) state.mode = state.prevMode;
     return;
   }
   if (state.mode === 'busted' || state.mode === 'wasted' || state.mode === 'complete') {
@@ -256,8 +260,6 @@ function update(dt) {
     state.audio.click();
     return;
   }
-
-  // M opens the mission list; M again (or Esc) closes it.
   if (pressed.has('mission')) {
     state.prevMode = 'playing';
     state.mode = 'missions';
@@ -265,7 +267,7 @@ function update(dt) {
     return;
   }
 
-  // Shop interaction wins over stealing a car when on foot near a shop.
+  // A shop wins over stealing when on foot near one and no car is closer.
   const p = state.player;
   if (pressed.has('interact') && p.onFoot && nearShop(state)) {
     const carNear = state.cars.some((c) => !c.dead && Math.hypot(c.x - p.x, c.y - p.y) < 45);
@@ -303,7 +305,7 @@ function handleButton(id) {
   }
 }
 
-// --- render ------------------------------------------------------------------------
+// --- render ---------------------------------------------------------------
 
 state.render = function render() {
   const input = state.input;
@@ -326,7 +328,7 @@ state.render = function render() {
   }
 };
 
-// --- main loop ----------------------------------------------------------------------
+// --- main loop --------------------------------------------------------------
 
 let last = performance.now();
 function frame(now) {
@@ -338,9 +340,9 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// --- boot ------------------------------------------------------------------------------
+// --- boot -------------------------------------------------------------------
 
-// Debug/test handle: lets a browser session inspect the live game state.
+// Debug handle: lets a browser session inspect the live game state.
 window.__solmar = state;
 
 populateWorld();

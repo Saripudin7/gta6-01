@@ -1,12 +1,15 @@
-// Synthesized sound with WebAudio — no audio files, everything is generated:
-// engine hum, siren, gunshot, pickup chime, mission jingle, crash thud.
+// Synthesized sound, WebAudio only — no audio files at all. Engine hum,
+// two-tone siren, gunshot, pickup chime, mission jingle and crash thud
+// are all generated from oscillators and filtered noise.
 export function createAudio() {
   const audio = {
     ctx: null,
+    master: null,
     muted: false,
     engineOsc: null,
     engineGain: null,
     sirenTimer: 0,
+    sirenHigh: false,
   };
 
   audio.ensure = function ensure() {
@@ -17,15 +20,15 @@ export function createAudio() {
       audio.master = audio.ctx.createGain();
       audio.master.gain.value = 0.5;
       audio.master.connect(audio.ctx.destination);
-      // Engine: a low sawtooth whose pitch follows speed, started on demand.
+      // Engine: low sawtooth through a lowpass, pitch follows speed.
       audio.engineOsc = audio.ctx.createOscillator();
       audio.engineOsc.type = 'sawtooth';
       audio.engineOsc.frequency.value = 55;
-      audio.engineGain = audio.ctx.createGain();
-      audio.engineGain.gain.value = 0;
       const filter = audio.ctx.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = 420;
+      audio.engineGain = audio.ctx.createGain();
+      audio.engineGain.gain.value = 0;
       audio.engineOsc.connect(filter);
       filter.connect(audio.engineGain);
       audio.engineGain.connect(audio.master);
@@ -36,7 +39,8 @@ export function createAudio() {
   };
 
   audio.setEngine = function setEngine(speedRatio, on) {
-    if (!audio.ctx || audio.muted) {
+    if (!audio.ctx) return;
+    if (audio.muted) {
       if (audio.engineGain) audio.engineGain.gain.value = 0;
       return;
     }
@@ -84,37 +88,43 @@ export function createAudio() {
     noise(0.14, 0.5, 1800);
     tone(160, 0.08, 'square', 0.12, 0, 60);
   };
+
   audio.pickup = function pickup() {
     tone(660, 0.1, 'sine', 0.22);
     tone(880, 0.12, 'sine', 0.22, 0.09);
     tone(1320, 0.16, 'sine', 0.18, 0.18);
   };
+
   audio.missionDone = function missionDone() {
-    [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.22, 'triangle', 0.25, i * 0.12));
+    [523, 659, 784, 1047].forEach((freq, i) => tone(freq, 0.22, 'triangle', 0.25, i * 0.12));
   };
+
   audio.busted = function busted() {
-    [392, 330, 262, 196].forEach((f, i) => tone(f, 0.3, 'sawtooth', 0.16, i * 0.16));
+    [392, 330, 262, 196].forEach((freq, i) => tone(freq, 0.3, 'sawtooth', 0.16, i * 0.16));
   };
+
   audio.crash = function crash() {
     noise(0.25, 0.4, 500);
   };
+
   audio.click = function click() {
     tone(880, 0.05, 'square', 0.1);
   };
+
   audio.siren = function siren(dt) {
     if (!audio.ctx || audio.muted) return;
     audio.sirenTimer += dt;
-    // Two-tone wail, one blip per frame slice is enough at 60fps.
-    if (audio.sirenTimer > 0.45) {
-      audio.sirenTimer = 0;
-      const hi = audio.sirenHi = !audio.sirenHi;
-      tone(hi ? 960 : 720, 0.42, 'sine', 0.05);
-    }
+    if (audio.sirenTimer <= 0.45) return;
+    audio.sirenTimer = 0;
+    audio.sirenHigh = !audio.sirenHigh;
+    tone(audio.sirenHigh ? 960 : 720, 0.42, 'sine', 0.05);
   };
+
   audio.toggleMute = function toggleMute() {
     audio.muted = !audio.muted;
     if (audio.engineGain) audio.engineGain.gain.value = 0;
     return audio.muted;
   };
+
   return audio;
 }

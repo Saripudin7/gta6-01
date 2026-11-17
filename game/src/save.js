@@ -1,5 +1,6 @@
-// Save and load through localStorage. The save holds money, mission
-// progress, owned cars and the player's position — never the live traffic.
+// Save / load through localStorage. The save stores money, story
+// progress, owned cars and the player's position — never live traffic,
+// so loading always starts from a clean, working street.
 import { SAVE_KEY } from './config.js';
 
 export function saveGame(state) {
@@ -40,6 +41,6 @@ export function clearSave() {
   try {
     localStorage.removeItem(SAVE_KEY);
   } catch {
-    // storage unavailable — nothing to clear
+    // Storage unavailable — nothing to clear.
   }
 }

@@ -1,8 +1,9 @@
-// Deterministic seeded random numbers (mulberry32) so the city and the
-// screenshot scenes are repeatable from a ?seed= value.
+// Seeded randomness (mulberry32) plus the small math helpers the whole
+// game shares. One seed drives the city, traffic and pedestrians so a
+// ?seed=N run is repeatable.
 export function makeRng(seed) {
   let a = seed >>> 0;
-  return function rng() {
+  return function next() {
     a |= 0;
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -11,8 +12,8 @@ export function makeRng(seed) {
   };
 }
 
-export function pick(rng, arr) {
-  return arr[Math.floor(rng() * arr.length)];
+export function pick(rng, list) {
+  return list[Math.floor(rng() * list.length)];
 }
 
 export function range(rng, min, max) {
@@ -23,8 +24,10 @@ export function int(rng, min, max) {
   return Math.floor(range(rng, min, max + 1));
 }
 
-export function clamp(v, min, max) {
-  return v < min ? min : v > max ? max : v;
+export function clamp(value, min, max) {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
 }
 
 export function dist2(ax, ay, bx, by) {
@@ -33,6 +36,7 @@ export function dist2(ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
+// Shortest-path interpolation between two angles.
 export function angleLerp(a, b, t) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;

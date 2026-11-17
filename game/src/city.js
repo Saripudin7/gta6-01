@@ -1,6 +1,6 @@
-// Solmar Bay city generation: a road grid, building blocks, parks, a beach
-// and docks. The whole city is pre-rendered once to an offscreen canvas so
-// the frame loop only draws the visible slice.
+// Solmar Bay city generation: a road grid, building blocks, parks, a
+// beach with a boardwalk, and docks. The city is pre-rendered once to an
+// offscreen canvas, so the frame loop only draws the visible slice.
 import { WORLD_W, WORLD_H, ROAD_W, BLOCK, PALETTE, PLACES } from './config.js';
 import { makeRng, pick, range, int } from './random.js';
 
@@ -16,13 +16,13 @@ export function roadCentersY() {
   return ys;
 }
 
+// True when a point sits on asphalt (inside a road strip).
 export function isOnRoad(x, y) {
   const rx = x % BLOCK;
   const ry = y % BLOCK;
   return rx < ROAD_W / 2 || rx > BLOCK - ROAD_W / 2 || ry < ROAD_W / 2 || ry > BLOCK - ROAD_W / 2;
 }
 
-// Nearest road centre coordinate on the given axis.
 export function snapToRoad(v) {
   return Math.round(v / BLOCK) * BLOCK;
 }
@@ -33,26 +33,26 @@ export function generateCity(seed) {
   const trees = [];
   const parks = [];
   const lots = [];
+  const cols = WORLD_W / BLOCK;
+  const rows = WORLD_H / BLOCK;
 
-  // Special blocks (by block index bx, by): beach row at the bottom, docks east.
-  for (let by = 0; by < WORLD_H / BLOCK; by++) {
-    for (let bx = 0; bx < WORLD_W / BLOCK; bx++) {
+  for (let by = 0; by < rows; by++) {
+    for (let bx = 0; bx < cols; bx++) {
       const x0 = bx * BLOCK + ROAD_W / 2;
       const y0 = by * BLOCK + ROAD_W / 2;
       const w = BLOCK - ROAD_W;
       const h = BLOCK - ROAD_W;
-      const key = `${bx},${by}`;
-      // Beach strip along the south edge (last row).
-      if (by === WORLD_H / BLOCK - 1) {
+      // Beach strip along the south edge.
+      if (by === rows - 1) {
         lots.push({ kind: 'beach', x: x0, y: y0, w, h });
         continue;
       }
       // Docks along the east edge.
-      if (bx === WORLD_W / BLOCK - 1 && by >= 1 && by <= 3) {
+      if (bx === cols - 1 && by >= 1 && by <= 3) {
         lots.push({ kind: 'docks', x: x0, y: y0, w, h });
         continue;
       }
-      // A park every so often.
+      // A park every so often, with a pond and trees.
       if (rng() < 0.14) {
         parks.push({ x: x0, y: y0, w, h });
         for (let i = 0; i < 7; i++) {
@@ -60,28 +60,25 @@ export function generateCity(seed) {
         }
         continue;
       }
-      // Plaza with a fountain.
+      // A plaza with a fountain.
       if (rng() < 0.08) {
         lots.push({ kind: 'plaza', x: x0, y: y0, w, h });
         continue;
       }
-      // Buildings: 2-4 per block, kept off the sidewalk edge.
+      // Buildings: 2–4 per block, kept off the sidewalk edge and apart.
       const n = int(rng, 2, 4);
-      const spots = [];
+      const placed = [];
       for (let i = 0; i < n; i++) {
         const bw = range(rng, 80, 150);
         const bh = range(rng, 70, 130);
         const bx0 = x0 + range(rng, 8, Math.max(9, w - bw - 8));
         const by0 = y0 + range(rng, 8, Math.max(9, h - bh - 8));
-        // Avoid overlapping an earlier building in this block.
-        if (spots.some((s) => bx0 < s.x + s.w + 14 && bx0 + bw + 14 > s.x && by0 < s.y + s.h + 14 && by0 + bh + 14 > s.y)) continue;
-        spots.push({ x: bx0, y: by0, w: bw, h: bh });
-        buildings.push({
-          x: bx0, y: by0, w: bw, h: bh,
-          roof: pick(rng, PALETTE.buildingRoof),
-          tall: rng() < 0.25,
-          key,
-        });
+        const overlap = placed.some(
+          (s) => bx0 < s.x + s.w + 14 && bx0 + bw + 14 > s.x && by0 < s.y + s.h + 14 && by0 + bh + 14 > s.y,
+        );
+        if (overlap) continue;
+        placed.push({ x: bx0, y: by0, w: bw, h: bh });
+        buildings.push({ x: bx0, y: by0, w: bw, h: bh, roof: pick(rng, PALETTE.roofs), tall: rng() < 0.25 });
       }
       // Street trees along the block edge.
       for (let i = 0; i < 3; i++) {
@@ -90,25 +87,26 @@ export function generateCity(seed) {
     }
   }
 
-  // Named place markers sit on roads/plazas; keep their blocks clear of
-  // buildings so the player can always reach them.
-  const clearAt = (cx, cy, r) => {
+  // Named places must stay reachable: clear buildings around them.
+  const clearAround = (cx, cy, radius) => {
     for (let i = buildings.length - 1; i >= 0; i--) {
       const b = buildings[i];
-      if (b.x < cx + r && b.x + b.w > cx - r && b.y < cy + r && b.y + b.h > cy - r) buildings.splice(i, 1);
+      if (b.x < cx + radius && b.x + b.w > cx - radius && b.y < cy + radius && b.y + b.h > cy - radius) {
+        buildings.splice(i, 1);
+      }
     }
   };
-  clearAt(PLACES.safehouse.x, PLACES.safehouse.y, 90);
-  clearAt(PLACES.paintShop.x, PLACES.paintShop.y, 90);
-  clearAt(PLACES.bank.x, PLACES.bank.y, 90);
-  clearAt(PLACES.carLot.x, PLACES.carLot.y, 110);
-  clearAt(PLACES.gunShop.x, PLACES.gunShop.y, 80);
-  clearAt(PLACES.hospital.x, PLACES.hospital.y, 80);
+  clearAround(PLACES.safehouse.x, PLACES.safehouse.y, 90);
+  clearAround(PLACES.paintShop.x, PLACES.paintShop.y, 90);
+  clearAround(PLACES.bank.x, PLACES.bank.y, 90);
+  clearAround(PLACES.carLot.x, PLACES.carLot.y, 110);
+  clearAround(PLACES.gunShop.x, PLACES.gunShop.y, 80);
+  clearAround(PLACES.hospital.x, PLACES.hospital.y, 80);
 
   return { buildings, trees, parks, lots, seed };
 }
 
-// Point vs building collision: returns the building hit, or null.
+// The building a point sits inside, or null.
 export function hitBuilding(city, x, y, pad = 0) {
   for (const b of city.buildings) {
     if (x > b.x - pad && x < b.x + b.w + pad && y > b.y - pad && y < b.y + b.h + pad) return b;
@@ -116,7 +114,7 @@ export function hitBuilding(city, x, y, pad = 0) {
   return null;
 }
 
-// Push a circle out of buildings; returns true if it was inside one.
+// Push a circle out of the building it overlaps; true when it was inside.
 export function resolveBuildingCollision(city, obj, radius) {
   const b = hitBuilding(city, obj.x, obj.y, 0);
   if (!b) return false;
@@ -138,11 +136,11 @@ export function renderCityBackground(city) {
   canvas.height = WORLD_H;
   const g = canvas.getContext('2d');
 
-  // Base ground.
+  // Grass base.
   g.fillStyle = PALETTE.grass;
   g.fillRect(0, 0, WORLD_W, WORLD_H);
 
-  // Sea + sand along the south edge.
+  // Sea, sand and boardwalk along the south edge.
   g.fillStyle = PALETTE.sand;
   g.fillRect(0, WORLD_H - 200, WORLD_W, 200);
   g.fillStyle = PALETTE.sea;
@@ -152,18 +150,16 @@ export function renderCityBackground(city) {
     g.fillRect(x + 20, WORLD_H - 84, 46, 4);
     g.fillRect(x + 55, WORLD_H - 52, 30, 4);
   }
-  // Boardwalk line.
   g.fillStyle = '#a98f66';
   g.fillRect(0, WORLD_H - 206, WORLD_W, 8);
 
-  // Parks and plazas.
+  // Parks with ponds, plazas with fountains, docks with piers.
   for (const p of city.parks) {
     g.fillStyle = PALETTE.park;
     g.fillRect(p.x, p.y, p.w, p.h);
     g.strokeStyle = '#4a7d3c';
     g.lineWidth = 4;
     g.strokeRect(p.x + 6, p.y + 6, p.w - 12, p.h - 12);
-    // Pond.
     g.fillStyle = '#6fb3c9';
     g.beginPath();
     g.ellipse(p.x + p.w / 2, p.y + p.h / 2, 34, 22, 0, 0, Math.PI * 2);
@@ -177,7 +173,7 @@ export function renderCityBackground(city) {
       g.beginPath();
       g.arc(l.x + l.w / 2, l.y + l.h / 2, 22, 0, Math.PI * 2);
       g.fill();
-      g.fillStyle = '#cbb98f';
+      g.fillStyle = PALETTE.plaza;
       g.beginPath();
       g.arc(l.x + l.w / 2, l.y + l.h / 2, 12, 0, Math.PI * 2);
       g.fill();
@@ -191,7 +187,7 @@ export function renderCityBackground(city) {
     }
   }
 
-  // Roads: dark asphalt with sidewalks, then centre dashes.
+  // Roads: sidewalk border, asphalt, centre dashes, crosswalks.
   g.fillStyle = PALETTE.sidewalk;
   for (let x = 0; x <= WORLD_W; x += BLOCK) g.fillRect(x - ROAD_W / 2 - 8, 0, ROAD_W + 16, WORLD_H);
   for (let y = 0; y <= WORLD_H; y += BLOCK) g.fillRect(0, y - ROAD_W / 2 - 8, WORLD_W, ROAD_W + 16);
@@ -205,7 +201,6 @@ export function renderCityBackground(city) {
   for (let y = 0; y <= WORLD_H; y += BLOCK) {
     for (let x = 40; x < WORLD_W; x += 80) g.fillRect(x, y - 2, 34, 4);
   }
-  // Crosswalks at intersections.
   g.fillStyle = '#d8d2c2';
   for (let x = 0; x <= WORLD_W; x += BLOCK) {
     for (let y = 0; y <= WORLD_H; y += BLOCK) {
@@ -216,11 +211,11 @@ export function renderCityBackground(city) {
     }
   }
 
-  // Buildings with a soft drop shadow, roof colour and a skylight.
+  // Buildings: drop shadow, wall, coloured roof, skylight, tall-block core.
   for (const b of city.buildings) {
     g.fillStyle = 'rgba(0,0,0,0.25)';
     g.fillRect(b.x + 6, b.y + 8, b.w, b.h);
-    g.fillStyle = PALETTE.buildingWall;
+    g.fillStyle = '#e8ddc9';
     g.fillRect(b.x, b.y, b.w, b.h);
     g.fillStyle = b.roof;
     g.fillRect(b.x + 5, b.y + 5, b.w - 10, b.h - 10);
@@ -234,7 +229,7 @@ export function renderCityBackground(city) {
     }
   }
 
-  // Trees.
+  // Trees with a soft shadow.
   for (const t of city.trees) {
     g.fillStyle = 'rgba(0,0,0,0.2)';
     g.beginPath();
@@ -250,7 +245,7 @@ export function renderCityBackground(city) {
     g.fill();
   }
 
-  // Named place pads (coloured ground so they read from above).
+  // Coloured ground pads mark the named places so they read from above.
   const pads = [
     [PLACES.safehouse, '#7fb069'],
     [PLACES.paintShop, '#e07a5f'],
@@ -259,15 +254,15 @@ export function renderCityBackground(city) {
     [PLACES.gunShop, '#9a8c98'],
     [PLACES.hospital, '#f4f1de'],
   ];
-  for (const [p, color] of pads) {
+  for (const [place, color] of pads) {
     g.fillStyle = color;
     g.beginPath();
-    g.arc(p.x, p.y, 52, 0, Math.PI * 2);
+    g.arc(place.x, place.y, 52, 0, Math.PI * 2);
     g.fill();
-    g.fillStyle = 'rgba(0,0,0,0.25)';
-    g.beginPath();
-    g.arc(p.x, p.y, 52, 0, Math.PI * 2);
+    g.strokeStyle = 'rgba(0,0,0,0.25)';
     g.lineWidth = 4;
+    g.beginPath();
+    g.arc(place.x, place.y, 52, 0, Math.PI * 2);
     g.stroke();
   }
 

@@ -1,10 +1,11 @@
-// The wanted system: heat rises with crimes, decays when the player stays
+// The wanted system: heat rises with crimes, cools when the player stays
 // out of sight, and police cruisers spawn to match the star level.
+// Busted (caught on foot) and wasted (health gone) end the run at the
+// Safehouse with a fine.
 import { WORLD_W, WORLD_H } from './config.js';
 import { clamp } from './random.js';
 import { spawnPolice } from './vehicles.js';
 
-export const WANTED_HEAT_PER_STAR = 1;
 export const MAX_WANTED = 5;
 
 export function wantedStars(heat) {
@@ -29,26 +30,23 @@ export function addWanted(state, amount, crime) {
   syncPolice(state);
 }
 
+// Keep the number of live cruisers equal to the star level.
 export function syncPolice(state) {
   const want = state.wantedStars;
   const have = state.cars.filter((c) => c.police && !c.dead).length;
   if (want > have) {
-    // Spawn the missing cruisers on roads near the player, off-screen.
     for (let i = have; i < want; i++) {
       const p = state.player;
       const px = p.inCar && p.car ? p.car.x : p.x;
       const py = p.inCar && p.car ? p.car.y : p.y;
       const ang = state.rng() * Math.PI * 2;
       const r = 700 + state.rng() * 200;
-      let x = clamp(px + Math.cos(ang) * r, 40, WORLD_W - 40);
-      let y = clamp(py + Math.sin(ang) * r, 40, WORLD_H - 40);
-      // Snap onto the nearest road so cruisers do not spawn inside a block.
-      x = Math.round(x / 400) * 400;
-      y = Math.round(y / 400) * 400;
+      // Spawn off-screen, snapped onto a road so no cruiser starts inside a block.
+      const x = Math.round(clamp(px + Math.cos(ang) * r, 40, WORLD_W - 40) / 400) * 400;
+      const y = Math.round(clamp(py + Math.sin(ang) * r, 40, WORLD_H - 40) / 400) * 400;
       spawnPolice(state, x, y);
     }
   } else if (want < have) {
-    // Extra cruisers give up and drive off (marked dead; they fade out).
     let excess = have - want;
     for (const c of state.cars) {
       if (excess <= 0) break;
@@ -68,7 +66,8 @@ export function updateWanted(state, dt) {
   }
   if (state.crimeFlash > 0) state.crimeFlash -= dt;
 
-  // Heat decays only while no police cruiser is close.
+  // Heat decays only while no cruiser is close and the player keeps a low
+  // profile for a few seconds.
   const p = state.player;
   const px = p.inCar && p.car ? p.car.x : p.x;
   const py = p.inCar && p.car ? p.car.y : p.y;
@@ -88,7 +87,7 @@ export function updateWanted(state, dt) {
     state.heatDecayTimer = 0;
   }
 
-  // Busted: a cruiser sits on top of the player on foot.
+  // Busted: a cruiser sits on top of the player while on foot.
   if (!p.inCar && state.wantedStars > 0) {
     const copClose = state.cars.some(
       (c) => c.police && !c.dead && Math.hypot(c.x - p.x, c.y - p.y) < 70,

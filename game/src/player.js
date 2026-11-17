@@ -1,5 +1,6 @@
 // The player: on-foot movement and combat, stealing and driving cars,
-// health and ammo, and the busted/wasted consequences.
+// health and ammo. Stealing a stranger's car is a crime; your own cars
+// (bought at Rico's) are free to take.
 import { WORLD_W, WORLD_H } from './config.js';
 import { clamp, dist2 } from './random.js';
 import { resolveBuildingCollision, hitBuilding } from './city.js';
@@ -11,7 +12,6 @@ export function createPlayer(state) {
     x: 560,
     y: 640,
     angle: -Math.PI / 2,
-    speed: 0,
     onFoot: true,
     inCar: false,
     car: null,
@@ -47,12 +47,11 @@ export function enterCar(state, car) {
   p.car = car;
   car.ai = null;
   state.stats.carsStolen++;
-  if (!state.ownedCars.includes(car.id)) {
-    // Stealing a stranger's car is a crime — unless it is yours.
+  if (state.ownedCars.includes(car.id)) {
+    state.showToast(`Driving your ${car.name}.`);
+  } else {
     addWanted(state, 1, 'Stole a car');
     state.showToast(`Stole a ${car.name}! The cops noticed.`);
-  } else {
-    state.showToast(`Driving your ${car.name}.`);
   }
   state.audio.click();
 }
@@ -63,10 +62,8 @@ export function exitCar(state) {
   const car = p.car;
   car.speed = 0;
   // Step out to the side of the car.
-  const side = Math.cos(car.angle + Math.PI / 2);
-  const sideY = Math.sin(car.angle + Math.PI / 2);
-  p.x = car.x + side * 26;
-  p.y = car.y + sideY * 26;
+  p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 26;
+  p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 26;
   p.angle = car.angle;
   p.inCar = false;
   p.onFoot = true;
@@ -97,7 +94,7 @@ export function updatePlayer(state, dt, input, pressed) {
   if (p.fireCooldown > 0) p.fireCooldown -= dt;
   if (p.hurtFlash > 0) p.hurtFlash -= dt;
 
-  // Aim with the mouse (screen space -> world space).
+  // Aim with the mouse: screen space back into world space.
   const cam = state.camera;
   const worldMouseX = cam.x + input.mouse.x / cam.zoom;
   const worldMouseY = cam.y + input.mouse.y / cam.zoom;
@@ -121,7 +118,6 @@ export function updatePlayer(state, dt, input, pressed) {
     p.y = p.car.y;
     p.angle = p.car.angle;
     state.audio.setEngine(Math.abs(p.car.speed) / p.car.topSpeed, true);
-    // Running over a ped in your car is handled in pedestrians.js.
     return;
   }
 
@@ -149,23 +145,22 @@ export function updatePlayer(state, dt, input, pressed) {
   // Shoot with the mouse.
   if (input.mouse.down) fireBullet(state);
 
-  // Pick up cash / health / ammo lying around.
+  // Pick up cash, health and ammo lying around.
   for (const pk of state.pickups) {
     if (pk.dead) continue;
-    if (dist2(p.x, p.y, pk.x, pk.y) < 30 * 30) {
-      pk.dead = true;
-      if (pk.kind === 'cash') {
-        state.money += pk.amount;
-        state.showToast(`+$${pk.amount}`);
-      } else if (pk.kind === 'health') {
-        p.health = Math.min(p.maxHealth, p.health + 40);
-        state.showToast('Health +40');
-      } else if (pk.kind === 'ammo') {
-        p.ammo += 24;
-        state.showToast('Ammo +24');
-      }
-      state.audio.pickup();
+    if (dist2(p.x, p.y, pk.x, pk.y) >= 30 * 30) continue;
+    pk.dead = true;
+    if (pk.kind === 'cash') {
+      state.money += pk.amount;
+      state.showToast(`+$${pk.amount}`);
+    } else if (pk.kind === 'health') {
+      p.health = Math.min(p.maxHealth, p.health + 40);
+      state.showToast('Health +40');
+    } else {
+      p.ammo += 24;
+      state.showToast('Ammo +24');
     }
+    state.audio.pickup();
   }
   state.pickups = state.pickups.filter((pk) => !pk.dead);
 }
@@ -173,8 +168,7 @@ export function updatePlayer(state, dt, input, pressed) {
 export function damagePlayer(state, amount, source) {
   const p = state.player;
   if (p.hurtFlash > 0.35) return;
-  p.health -= amount;
+  p.health = Math.max(0, p.health - amount);
   p.hurtFlash = 0.5;
-  if (p.health < 0) p.health = 0;
   state.showToast(`Hit by ${source}!`);
 }
