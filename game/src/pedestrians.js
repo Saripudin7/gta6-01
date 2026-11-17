@@ -1,115 +1,121 @@
-// Pedestrians: they walk the sidewalks, cross at intersections, and flee
-// from gunfire and from speeding cars. Running one over is a crime.
-import { WORLD_W, WORLD_H, BLOCK, ROAD_W } from './config.js';
-import { range, int, clamp, dist2 } from './random.js';
-import { hitBuilding, resolveBuildingCollision } from './city.js';
+// Solmar Bay — pedestrians: ordinary people walking the sidewalks who run
+// away from gunfire and from speeding cars. They give the city life and make
+// reckless driving feel reckless.
 
-const SHIRTS = ['#e07a5f', '#81b29a', '#e8c15a', '#9a8c98', '#5b7fa6', '#d97b2b', '#f4f1de', '#7d9b76'];
-const SKINS = ['#e8b88a', '#c98d5f', '#8a5a3b', '#f0c8a0'];
+import { WORLD, ROADS_X, ROADS_Y } from './config.js';
+import { dist } from './random.js';
 
-export function spawnPedestrians(state, count) {
-  const rng = state.rng;
-  for (let i = 0; i < count; i++) {
-    const x = range(rng, 80, WORLD_W - 80);
-    const y = range(rng, 80, WORLD_H - 80);
-    if (hitBuilding(state.city, x, y, 14)) continue;
-    state.peds.push({
-      x,
-      y,
-      angle: range(rng, 0, Math.PI * 2),
-      speed: range(rng, 26, 48),
-      shirt: SHIRTS[int(rng, 0, SHIRTS.length - 1)],
-      skin: SKINS[int(rng, 0, SKINS.length - 1)],
-      state: 'walk',
-      panic: 0,
-      wanderTimer: range(rng, 2, 6),
-      targetX: undefined,
-      targetY: undefined,
-      dead: false,
-      hitFlash: 0,
-    });
-  }
+const SHIRTS = ['#e07a5f', '#81b29a', '#f2cc8f', '#6d9dc5', '#c77dff', '#e8e8e8', '#f4a259', '#90be6d'];
+const PANTS = ['#2b2d42', '#4a4e69', '#6c584c', '#3a3a3a', '#5a6b7a'];
+
+// Make one pedestrian standing on a sidewalk near (x, y).
+export function makePed(rng, x, y) {
+  return {
+    x, y,
+    angle: rng.range(0, Math.PI * 2),
+    speed: rng.range(38, 62),
+    walkPhase: rng.range(0, Math.PI * 2),
+    shirt: rng.pick(SHIRTS),
+    pants: rng.pick(PANTS),
+    skin: rng.pick(['#f1c27d', '#e0ac69', '#c68642', '#8d5524', '#ffdbac']),
+    fleeing: 0,        // seconds left of panic
+    fleeX: 0, fleeY: 0,
+    targetX: x, targetY: y,
+    wait: rng.range(0, 2),
+  };
 }
 
-export function updatePedestrians(state, dt) {
-  const p = state.player;
-  const px = p.inCar && p.car ? p.car.x : p.x;
-  const py = p.inCar && p.car ? p.car.y : p.y;
-  const danger = state.bullets.length > 0 || state.wantedStars >= 2;
-
-  for (const ped of state.peds) {
-    if (ped.dead) continue;
-    if (ped.hitFlash > 0) ped.hitFlash -= dt;
-    const dPlayer = Math.hypot(ped.x - px, ped.y - py);
-
-    // Flee when the player is dangerous or closing fast in a car.
-    if ((danger && dPlayer < 260) || (p.inCar && dPlayer < 90)) {
-      ped.state = 'flee';
-      ped.panic = 1.2;
-    }
-    if (ped.panic > 0) ped.panic -= dt;
-
-    if (ped.state === 'flee') {
-      const away = Math.atan2(ped.y - py, ped.x - px);
-      ped.angle = away;
-      ped.x += Math.cos(away) * 150 * dt;
-      ped.y += Math.sin(away) * 150 * dt;
-      if (ped.panic <= 0) ped.state = 'walk';
+// Scatter pedestrians across the sidewalks, away from the player start.
+export function spawnPeds(rng, count, playerX, playerY) {
+  const peds = [];
+  let guard = 0;
+  while (peds.length < count && guard < count * 20) {
+    guard += 1;
+    const vertical = rng.chance(0.5);
+    let x;
+    let y;
+    if (vertical) {
+      x = rng.pick(ROADS_X) + rng.pick([-58, 58]);
+      y = rng.range(80, WORLD.height - 80);
     } else {
-      ped.wanderTimer -= dt;
-      if (ped.wanderTimer <= 0) {
-        ped.wanderTimer = range(state.rng, 2, 7);
-        // Pick a new stroll along the nearest sidewalk line.
-        const vertical = state.rng() < 0.5;
-        const road = Math.round((vertical ? ped.x : ped.y) / BLOCK) * BLOCK;
-        const side = state.rng() < 0.5 ? -1 : 1;
-        const offset = ROAD_W / 2 + 10;
-        if (vertical) {
-          ped.targetX = road + side * offset;
-          ped.targetY = ped.y + range(state.rng, -260, 260);
-        } else {
-          ped.targetX = ped.x + range(state.rng, -260, 260);
-          ped.targetY = road + side * offset;
-        }
-      }
-      if (ped.targetX !== undefined) {
-        const dx = ped.targetX - ped.x;
-        const dy = ped.targetY - ped.y;
-        const d = Math.hypot(dx, dy);
-        if (d > 6) {
-          ped.angle = Math.atan2(dy, dx);
-          ped.x += (dx / d) * ped.speed * dt;
-          ped.y += (dy / d) * ped.speed * dt;
-        }
-      }
+      x = rng.range(80, 2860);
+      y = rng.pick(ROADS_Y) + rng.pick([-58, 58]);
     }
-    ped.x = clamp(ped.x, 16, WORLD_W - 16);
-    ped.y = clamp(ped.y, 16, WORLD_H - 16);
-    resolveBuildingCollision(state.city, ped, 8);
-
-    // Run over by a moving car.
-    for (const car of state.cars) {
-      if (car.dead || Math.abs(car.speed) < 60) continue;
-      if (dist2(ped.x, ped.y, car.x, car.y) < 26 * 26) {
-        killPed(state, ped, car);
-        break;
-      }
-    }
+    if (dist(x, y, playerX, playerY) < 260) continue;
+    if (x > 2880) continue;
+    peds.push(makePed(rng, x, y));
   }
-  state.peds = state.peds.filter((ped) => !ped.dead);
-  // Keep the streets populated.
-  if (state.peds.length < 46 && state.rng() < 0.05) spawnPedestrians(state, 2);
+  return peds;
 }
 
-export function killPed(state, ped, byCar) {
-  ped.dead = true;
-  state.addParticles(ped.x, ped.y, 10, ped.shirt);
-  if (byCar && byCar === state.player.car) {
-    state.addWanted(0.7, 'Ran over a pedestrian');
+// Pick a new strolling destination on a nearby sidewalk.
+function pickStrollTarget(ped, rng) {
+  const vertical = rng.chance(0.5);
+  if (vertical) {
+    const rx = rng.pick(ROADS_X);
+    ped.targetX = rx + rng.pick([-58, 58]);
+    ped.targetY = ped.y + rng.range(-260, 260);
+  } else {
+    const ry = rng.pick(ROADS_Y);
+    ped.targetX = ped.x + rng.range(-260, 260);
+    ped.targetY = ry + rng.pick([-58, 58]);
+  }
+  ped.targetX = Math.max(40, Math.min(2860, ped.targetX));
+  ped.targetY = Math.max(40, Math.min(WORLD.height - 40, ped.targetY));
+}
+
+// A gunshot or a speeding car nearby sends a pedestrian running.
+export function scarePeds(peds, x, y, radius) {
+  for (const ped of peds) {
+    if (dist(ped.x, ped.y, x, y) < radius) {
+      ped.fleeing = 2.5;
+      const dx = ped.x - x;
+      const dy = ped.y - y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      ped.fleeX = ped.x + (dx / d) * 220;
+      ped.fleeY = ped.y + (dy / d) * 220;
+    }
   }
 }
 
-export function shootPed(state, ped) {
-  ped.dead = true;
-  state.addParticles(ped.x, ped.y, 10, '#c0392b');
+// Move every pedestrian. Fleeing ones sprint away; the rest stroll between
+// sidewalk targets, pausing now and then like real people do.
+export function updatePeds(peds, dt, rng, danger) {
+  for (const ped of peds) {
+    ped.walkPhase += dt * (ped.fleeing > 0 ? 14 : 7);
+    if (ped.fleeing > 0) {
+      ped.fleeing -= dt;
+      const dx = ped.fleeX - ped.x;
+      const dy = ped.fleeY - ped.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > 8) {
+        ped.angle = Math.atan2(dy, dx);
+        ped.x += Math.cos(ped.angle) * 150 * dt;
+        ped.y += Math.sin(ped.angle) * 150 * dt;
+      }
+      continue;
+    }
+    // A speeding car or a crash nearby is also scary.
+    if (danger && dist(ped.x, ped.y, danger.x, danger.y) < danger.radius) {
+      ped.fleeing = 2;
+      ped.fleeX = ped.x + (ped.x - danger.x) * 2;
+      ped.fleeY = ped.y + (ped.y - danger.y) * 2;
+      continue;
+    }
+    if (ped.wait > 0) {
+      ped.wait -= dt;
+      continue;
+    }
+    const dx = ped.targetX - ped.x;
+    const dy = ped.targetY - ped.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < 12) {
+      pickStrollTarget(ped, rng);
+      if (rng.chance(0.25)) ped.wait = rng.range(0.5, 2.5);
+      continue;
+    }
+    ped.angle = Math.atan2(dy, dx);
+    ped.x += Math.cos(ped.angle) * ped.speed * dt;
+    ped.y += Math.sin(ped.angle) * ped.speed * dt;
+  }
 }

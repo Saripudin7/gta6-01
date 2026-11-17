@@ -1,114 +1,99 @@
-// The wanted system: heat rises with crimes, cools when the player stays
-// out of sight, and police cruisers spawn to match the star level.
-// Busted (caught on foot) and wasted (health gone) end the run at the
-// Safehouse with a fine.
-import { WORLD_W, WORLD_H } from './config.js';
-import { clamp } from './random.js';
-import { spawnPolice } from './vehicles.js';
+// Solmar Bay — the wanted system: heat rises with crime, falls when the
+// police lose sight of you, and cruisers spawn to match the star level.
+// Getting caught costs a fine; getting away clean is the whole game.
 
-export const MAX_WANTED = 5;
+import { WANTED } from './config.js';
+import { clamp, dist } from './random.js';
+import { spawnPoliceCar } from './vehicles.js';
 
-export function wantedStars(heat) {
-  return clamp(Math.floor(heat + 0.0001), 0, MAX_WANTED);
+// How many cruisers a star level puts on the street.
+export function cruisersForStars(stars) {
+  return [0, 1, 2, 3, 4, 5][stars] || 0;
 }
 
-export function createWantedSystem(state) {
-  state.heat = 0;
-  state.wantedStars = 0;
-  state.heatDecayTimer = 0;
-  state.bustedMeter = 0;
-  state.crimeFlash = 0;
-  state.lastCrime = '';
+// Stars shown on the HUD, from the raw heat number.
+export function starsFromHeat(heat) {
+  return clamp(Math.floor(heat / WANTED.heatPerStar), 0, WANTED.maxStars);
 }
 
-export function addWanted(state, amount, crime) {
-  state.heat = clamp(state.heat + amount, 0, MAX_WANTED);
-  state.wantedStars = wantedStars(state.heat);
-  state.lastCrime = crime;
-  state.crimeFlash = 2.2;
-  state.heatDecayTimer = 0;
-  syncPolice(state);
+// Add heat for a crime. Stealing a car is loud; shooting is louder.
+export function addHeat(state, amount, reason) {
+  state.heat = clamp(state.heat + amount, 0, WANTED.maxStars * WANTED.heatPerStar + 10);
+  state.wanted = starsFromHeat(state.heat);
+  if (reason) state.lastCrime = reason;
 }
 
-// Keep the number of live cruisers equal to the star level.
-export function syncPolice(state) {
-  const want = state.wantedStars;
-  const have = state.cars.filter((c) => c.police && !c.dead).length;
-  if (want > have) {
-    for (let i = have; i < want; i++) {
-      const p = state.player;
-      const px = p.inCar && p.car ? p.car.x : p.x;
-      const py = p.inCar && p.car ? p.car.y : p.y;
-      const ang = state.rng() * Math.PI * 2;
-      const r = 700 + state.rng() * 200;
-      // Spawn off-screen, snapped onto a road so no cruiser starts inside a block.
-      const x = Math.round(clamp(px + Math.cos(ang) * r, 40, WORLD_W - 40) / 400) * 400;
-      const y = Math.round(clamp(py + Math.sin(ang) * r, 40, WORLD_H - 40) / 400) * 400;
-      spawnPolice(state, x, y);
-    }
-  } else if (want < have) {
-    let excess = have - want;
-    for (const c of state.cars) {
-      if (excess <= 0) break;
-      if (c.police && !c.dead) {
-        c.dead = true;
-        excess--;
-      }
-    }
-  }
-}
-
-export function updateWanted(state, dt) {
-  const stars = wantedStars(state.heat);
-  if (stars !== state.wantedStars) {
-    state.wantedStars = stars;
-    syncPolice(state);
-  }
-  if (state.crimeFlash > 0) state.crimeFlash -= dt;
-
-  // Heat decays only while no cruiser is close and the player keeps a low
-  // profile for a few seconds.
+// True when any police cruiser can see the player (close and roughly in
+// front of the cruiser, or very close at all).
+export function anyCopSeesPlayer(state) {
   const p = state.player;
-  const px = p.inCar && p.car ? p.car.x : p.x;
-  const py = p.inCar && p.car ? p.car.y : p.y;
-  const nearCop = state.cars.some(
-    (c) => c.police && !c.dead && Math.hypot(c.x - px, c.y - py) < 420,
-  );
-  if (state.heat > 0 && !nearCop) {
-    state.heatDecayTimer += dt;
-    if (state.heatDecayTimer > 4) {
-      state.heat = Math.max(0, state.heat - dt * 0.12);
-      if (state.wantedStars > wantedStars(state.heat)) {
-        state.wantedStars = wantedStars(state.heat);
-        syncPolice(state);
-      }
+  for (const cop of state.police) {
+    const d = dist(cop.x, cop.y, p.x, p.y);
+    if (d < 90) return true;
+    if (d < 420) {
+      const toPlayer = Math.atan2(p.y - cop.y, p.x - cop.x);
+      let diff = toPlayer - cop.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      if (Math.abs(diff) < 0.9) return true;
     }
-  } else {
-    state.heatDecayTimer = 0;
+  }
+  return false;
+}
+
+// The per-frame wanted update: decay heat, keep the cruiser count right,
+// chase with the cruisers, and check whether the player is busted.
+export function updateWanted(state, dt) {
+  const seen = anyCopSeesPlayer(state);
+  state.seenByPolice = seen;
+  // Heat decays; faster when nobody can see you.
+  const decay = seen ? WANTED.decaySeen : WANTED.decayPerSecond;
+  state.heat = Math.max(0, state.heat - decay * WANTED.heatPerStar * dt);
+  const stars = starsFromHeat(state.heat);
+  if (stars !== state.wanted) {
+    state.wanted = stars;
+    if (stars === 0) state.toast('You lost the heat. The SPPD stands down.', 'good');
   }
 
-  // Busted: a cruiser sits on top of the player while on foot.
-  if (!p.inCar && state.wantedStars > 0) {
-    const copClose = state.cars.some(
-      (c) => c.police && !c.dead && Math.hypot(c.x - p.x, c.y - p.y) < 70,
-    );
-    if (copClose) {
-      state.bustedMeter += dt * 0.55;
-      if (state.bustedMeter >= 1) {
-        state.bustedMeter = 0;
-        state.mode = 'busted';
-        state.audio.busted();
+  // Spawn or remove cruisers to match the star level.
+  const want = cruisersForStars(state.wanted);
+  while (state.police.length < want) {
+    const car = spawnPoliceCar(state.rng, state.player.x, state.player.y);
+    state.police.push(car);
+    state.cars.push(car);
+  }
+  while (state.police.length > want) {
+    const car = state.police.pop();
+    car.dead = true;
+  }
+
+  // Busted check: on foot, a cruiser parked on top of you for a while.
+  if (!state.player.inCar && state.wanted > 0) {
+    let closest = Infinity;
+    for (const cop of state.police) {
+      closest = Math.min(closest, dist(cop.x, cop.y, state.player.x, state.player.y));
+    }
+    if (closest < WANTED.bustedRange) {
+      state.bustedTimer += dt;
+      if (state.bustedTimer > WANTED.bustedHoldSeconds) {
+        state.bustedTimer = 0;
+        return 'busted';
       }
     } else {
-      state.bustedMeter = Math.max(0, state.bustedMeter - dt * 0.4);
+      state.bustedTimer = 0;
     }
   } else {
-    state.bustedMeter = Math.max(0, state.bustedMeter - dt * 0.4);
+    state.bustedTimer = 0;
   }
+  return null;
+}
 
-  // Wasted: health ran out.
-  if (state.player.health <= 0 && state.mode === 'playing') {
-    state.mode = 'wasted';
-    state.audio.busted();
-  }
+// Clear all heat (used by Paint & Repair and after being busted).
+export function clearWanted(state) {
+  state.heat = 0;
+  state.wanted = 0;
+  state.bustedTimer = 0;
+  for (const cop of state.police) cop.dead = true;
+  state.police = [];
+  state.cars = state.cars.filter((c) => c.driver !== 'police');
 }

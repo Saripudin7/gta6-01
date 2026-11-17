@@ -1,134 +1,161 @@
-// The Solmar Bay economy: the car lot, the paint-shop payoff, the gun
-// shop, the hospital and the safehouse. Money comes from missions and
-// rivals; spending it is how the player stays alive and stays free.
-import { PLACES, CAR_MODELS } from './config.js';
-import { dist2 } from './random.js';
+// Solmar Bay — the economy: shops, the car lot, repairs and payoffs.
+// Walk (or drive) into a shop's zone and press E. Every purchase is instant
+// and honest: if you cannot afford it, the shopkeeper tells you so.
+
+import { PLACES, PRICES, CAR_MODELS } from './config.js';
+import { dist } from './random.js';
+import { clearWanted } from './police.js';
 import { makeCar } from './vehicles.js';
 
-const SHOP_RADIUS = 95;
-
-export function nearShop(state) {
+// Find the shop whose zone the player is standing in right now.
+export function shopAt(state) {
   const p = state.player;
-  const px = p.inCar && p.car ? p.car.x : p.x;
-  const py = p.inCar && p.car ? p.car.y : p.y;
-  const shops = [
-    { id: 'carLot', place: PLACES.carLot },
-    { id: 'paintShop', place: PLACES.paintShop },
-    { id: 'gunShop', place: PLACES.gunShop },
-    { id: 'hospital', place: PLACES.hospital },
-    { id: 'safehouse', place: PLACES.safehouse },
-  ];
-  for (const shop of shops) {
-    if (dist2(px, py, shop.place.x, shop.place.y) < SHOP_RADIUS * SHOP_RADIUS) return shop;
+  for (const key of ['motors', 'arms', 'hospital', 'paint', 'safehouse']) {
+    const place = PLACES[key];
+    if (dist(p.x, p.y, place.x, place.y) < place.radius) return key;
   }
   return null;
 }
 
-function nextCarForSale(state) {
-  return CAR_MODELS.find((m) => m.price > 0 && !state.ownedModels.includes(m.id));
+// The one-line prompt shown when the player stands in a shop zone.
+export function shopPrompt(state, key) {
+  const p = state.player;
+  switch (key) {
+    case 'motors': return 'E — Browse Rico\'s Motors (Coupe $800 · Van $1500 · Comet GT $2500)';
+    case 'arms': return 'E — Buy ammo: 24 rounds for $' + PRICES.ammoBox + ' (you have ' + p.ammo + ')';
+    case 'hospital': return 'E — Full treatment for $' + PRICES.heal + ' (health ' + Math.round(p.health) + '/100)';
+    case 'paint': return 'E — Repaint & lose the heat: $' + PRICES.repaint + ' (wanted: ' + state.wanted + '★)';
+    case 'safehouse': return 'E — Save game & rest (free, restores health)';
+    default: return '';
+  }
 }
 
-export function shopPrompt(state, shop) {
+// The car lot menu: which models the player can buy right now.
+export function lotOptions(state) {
   const p = state.player;
-  if (shop.id === 'carLot') {
-    const next = nextCarForSale(state);
-    if (!next) return "Rico's Motors — you own every car for sale.";
-    return `E — Buy ${next.name} for $${next.price}  (you have $${state.money})`;
-  }
-  if (shop.id === 'paintShop') {
-    return state.wantedStars > 0
-      ? `E — Pay off the cops $150  (wanted ${state.wantedStars}★, you have $${state.money})`
-      : 'Paint & Repair — no heat to lose right now.';
-  }
-  if (shop.id === 'gunShop') {
-    return `E — Buy ammo +48 for $50  (you have $${state.money}, ${p.ammo} rounds)`;
-  }
-  if (shop.id === 'hospital') {
-    return p.health < p.maxHealth
-      ? `E — Full treatment $80  (health ${Math.round(p.health)}/100, you have $${state.money})`
-      : 'St. Marina Hospital — you are in perfect health.';
-  }
-  if (shop.id === 'safehouse') return 'E — Save game at the Safehouse';
-  return '';
+  return ['coupe', 'van', 'sport'].map((key) => ({
+    key,
+    name: CAR_MODELS[key].name,
+    price: CAR_MODELS[key].price,
+    owned: state.ownedCars.includes(key),
+    afford: p.money >= CAR_MODELS[key].price,
+  }));
 }
 
-// Returns true when the keypress was consumed by a shop.
-export function tryShop(state) {
-  const shop = nearShop(state);
-  if (!shop) return false;
+// Buy a car from the lot: it spawns beside the shop, owned, ready to drive.
+export function buyCar(state, modelKey) {
   const p = state.player;
-
-  if (shop.id === 'carLot') {
-    const next = nextCarForSale(state);
-    if (!next) {
-      state.showToast('You already own every car Rico sells.');
-      return true;
-    }
-    if (state.money < next.price) {
-      state.showToast(`You need $${next.price} for the ${next.name}.`);
-      return true;
-    }
-    state.money -= next.price;
-    state.ownedModels.push(next.id);
-    const car = makeCar(next.id, PLACES.carLot.x + 60, PLACES.carLot.y, 0, {});
-    state.cars.push(car);
-    state.ownedCars.push(car.id);
-    state.showToast(`Bought the ${next.name}! It is parked at Rico's.`);
-    state.audio.pickup();
+  const model = CAR_MODELS[modelKey];
+  if (!model || model.price === 0) return false;
+  if (state.ownedCars.includes(modelKey)) {
+    state.toast('You already own the ' + model.name + '. It is parked at the lot.', 'good');
     return true;
   }
+  if (p.money < model.price) {
+    state.toast('Not enough cash for the ' + model.name + ' — need $' + model.price + '.', 'bad');
+    state.sound.fail();
+    return false;
+  }
+  p.money -= model.price;
+  state.ownedCars.push(modelKey);
+  const car = makeCar(modelKey, PLACES.motors.x + 60, PLACES.motors.y + 40, 0, 'parked');
+  car.owned = true;
+  state.cars.push(car);
+  state.sound.cash();
+  state.toast('You bought the ' + model.name + ' for $' + model.price + '!', 'good');
+  state.saveGame();
+  return true;
+}
 
-  if (shop.id === 'paintShop') {
-    if (state.wantedStars === 0) {
-      state.showToast('No heat to lose — the cops are not after you.');
-      return true;
-    }
-    if (state.money < 150) {
-      state.showToast('The payoff costs $150.');
-      return true;
-    }
-    state.money -= 150;
-    state.heat = 0;
-    state.wantedStars = 0;
-    state.audio.pickup();
-    state.showToast('Paid off. The heat is gone — this time.');
+// The E-key interaction for whichever shop the player is in. Returns true
+// when something happened (so the caller can refresh the HUD).
+export function interactShop(state) {
+  const key = shopAt(state);
+  if (!key) return false;
+  const p = state.player;
+  if (key === 'motors') {
+    state.shopMenu = 'motors';
+    state.screen = 'shop';
+    state.sound.click();
     return true;
   }
-
-  if (shop.id === 'gunShop') {
-    if (state.money < 50) {
-      state.showToast('Ammo costs $50.');
+  if (key === 'arms') {
+    if (p.money < PRICES.ammoBox) {
+      state.toast('Harbor Arms: 24 rounds cost $' + PRICES.ammoBox + '. You are short.', 'bad');
       return true;
     }
-    state.money -= 50;
-    p.ammo += 48;
-    state.audio.pickup();
-    state.showToast('Ammo +48');
+    p.money -= PRICES.ammoBox;
+    p.ammo += PRICES.ammoRounds;
+    state.sound.pickup();
+    state.toast('Bought 24 rounds. Ammo: ' + p.ammo + '.', 'good');
     return true;
   }
-
-  if (shop.id === 'hospital') {
-    if (p.health >= p.maxHealth) {
-      state.showToast('You are already at full health.');
+  if (key === 'hospital') {
+    if (p.health >= 100) {
+      state.toast('St. Marina: you are already in perfect health.', 'good');
       return true;
     }
-    if (state.money < 80) {
-      state.showToast('Treatment costs $80.');
+    if (p.money < PRICES.heal) {
+      state.toast('Treatment costs $' + PRICES.heal + '. Come back with cash.', 'bad');
       return true;
     }
-    state.money -= 80;
-    p.health = p.maxHealth;
-    state.audio.pickup();
-    state.showToast('Patched up — full health.');
+    p.money -= PRICES.heal;
+    p.health = 100;
+    state.sound.chime();
+    state.toast('St. Marina patched you up. Health 100.', 'good');
     return true;
   }
-
-  if (shop.id === 'safehouse') {
+  if (key === 'paint') {
+    if (state.wanted === 0) {
+      state.toast('Paint & Repair: no heat on you — nothing to paint over.', 'good');
+      return true;
+    }
+    if (p.money < PRICES.repaint) {
+      state.toast('A new paint job costs $' + PRICES.repaint + '. You are short.', 'bad');
+      return true;
+    }
+    p.money -= PRICES.repaint;
+    clearWanted(state);
+    state.sound.chime();
+    state.toast('Fresh paint, clean plates. The SPPD lost you.', 'good');
+    return true;
+  }
+  if (key === 'safehouse') {
+    p.health = 100;
     state.saveGame();
-    state.showToast('Game saved at the Safehouse.');
-    state.audio.pickup();
+    state.sound.chime();
+    state.toast('Game saved at the Safehouse. Health restored.', 'good');
     return true;
   }
-
   return false;
+}
+
+// Being busted: lose the fine, lose the heat, wake up at the Safehouse.
+export function payBustedFine(state) {
+  const p = state.player;
+  const fine = Math.min(p.money, PRICES.bustedFine);
+  p.money -= fine;
+  state.lastFine = fine;
+  clearWanted(state);
+  p.health = 100;
+  if (p.inCar) { p.inCar.driver = 'parked'; p.inCar = null; }
+  p.x = PLACES.safehouse.x;
+  p.y = PLACES.safehouse.y;
+  state.rivals = [];
+  state.toast('Busted! The SPPD took $' + fine + ' and dropped you at the Safehouse.', 'bad');
+}
+
+// Being wasted: hospital bill, wake up at St. Marina.
+export function payHospitalBill(state) {
+  const p = state.player;
+  const bill = Math.min(p.money, PRICES.hospitalBill);
+  p.money -= bill;
+  state.lastFine = bill;
+  clearWanted(state);
+  p.health = 100;
+  if (p.inCar) { p.inCar.driver = 'parked'; p.inCar = null; }
+  p.x = PLACES.hospital.x;
+  p.y = PLACES.hospital.y;
+  state.rivals = [];
+  state.toast('You woke up at St. Marina. Bill: $' + bill + '.', 'bad');
 }

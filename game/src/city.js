@@ -1,269 +1,276 @@
-// Solmar Bay city generation: a road grid, building blocks, parks, a
-// beach with a boardwalk, and docks. The city is pre-rendered once to an
-// offscreen canvas, so the frame loop only draws the visible slice.
-import { WORLD_W, WORLD_H, ROAD_W, BLOCK, PALETTE, PLACES } from './config.js';
-import { makeRng, pick, range, int } from './random.js';
+// Solmar Bay — the city itself: a seeded grid of roads, blocks, buildings,
+// parks, the beach, the boardwalk and the pier. The whole static look is
+// painted once onto an offscreen canvas (prerendered background); the game
+// then just blits that canvas and draws the moving things on top.
 
-export function roadCentersX() {
-  const xs = [];
-  for (let x = 0; x <= WORLD_W; x += BLOCK) xs.push(x);
-  return xs;
+import { WORLD, ROADS_X, ROADS_Y, BEACH, PIER, PALETTE, PLACES } from './config.js';
+import { Rng, clamp } from './random.js';
+
+// One city block's building: a rectangle with a roof colour and a height
+// shade so the top-down view still reads as a skyline.
+function makeBuilding(rng, x, y, w, h) {
+  const roofs = [PALETTE.roofA, PALETTE.roofB, PALETTE.roofC, PALETTE.roofD, PALETTE.roofE];
+  return {
+    x, y, w, h,
+    roof: rng.pick(roofs),
+    shade: rng.range(0.82, 1.05),
+    yard: rng.chance(0.3),
+  };
 }
 
-export function roadCentersY() {
-  const ys = [];
-  for (let y = 0; y <= WORLD_H; y += BLOCK) ys.push(y);
-  return ys;
-}
-
-// True when a point sits on asphalt (inside a road strip).
-export function isOnRoad(x, y) {
-  const rx = x % BLOCK;
-  const ry = y % BLOCK;
-  return rx < ROAD_W / 2 || rx > BLOCK - ROAD_W / 2 || ry < ROAD_W / 2 || ry > BLOCK - ROAD_W / 2;
-}
-
-export function snapToRoad(v) {
-  return Math.round(v / BLOCK) * BLOCK;
-}
-
-export function generateCity(seed) {
-  const rng = makeRng(seed);
+// Build the city layout from a seed. Roads are fixed (the grid); everything
+// inside the blocks is rolled: buildings, parks, trees and parked cars.
+export function buildCity(seed) {
+  const rng = new Rng(seed);
   const buildings = [];
-  const trees = [];
   const parks = [];
-  const lots = [];
-  const cols = WORLD_W / BLOCK;
-  const rows = WORLD_H / BLOCK;
+  const trees = [];
+  const parked = [];
+  const roadHalf = WORLD.roadWidth / 2;
 
-  for (let by = 0; by < rows; by++) {
-    for (let bx = 0; bx < cols; bx++) {
-      const x0 = bx * BLOCK + ROAD_W / 2;
-      const y0 = by * BLOCK + ROAD_W / 2;
-      const w = BLOCK - ROAD_W;
-      const h = BLOCK - ROAD_W;
-      // Beach strip along the south edge.
-      if (by === rows - 1) {
-        lots.push({ kind: 'beach', x: x0, y: y0, w, h });
-        continue;
-      }
-      // Docks along the east edge.
-      if (bx === cols - 1 && by >= 1 && by <= 3) {
-        lots.push({ kind: 'docks', x: x0, y: y0, w, h });
-        continue;
-      }
-      // A park every so often, with a pond and trees.
-      if (rng() < 0.14) {
-        parks.push({ x: x0, y: y0, w, h });
-        for (let i = 0; i < 7; i++) {
-          trees.push({ x: x0 + range(rng, 20, w - 20), y: y0 + range(rng, 20, h - 20), r: range(rng, 9, 16) });
+  for (let bx = 0; bx < ROADS_X.length - 1; bx += 1) {
+    for (let by = 0; by < ROADS_Y.length - 1; by += 1) {
+      const x0 = ROADS_X[bx] + roadHalf + 14;
+      const y0 = ROADS_Y[by] + roadHalf + 14;
+      const x1 = ROADS_X[bx + 1] - roadHalf - 14;
+      const y1 = ROADS_Y[by + 1] - roadHalf - 14;
+      // The marina plaza block stays open: no buildings there.
+      const isPlaza = bx === 2 && by === 2;
+      const isPark = !isPlaza && rng.chance(0.16);
+      if (isPlaza || isPark) {
+        parks.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, plaza: isPlaza });
+        const count = rng.int(6, 12);
+        for (let i = 0; i < count; i += 1) {
+          trees.push({ x: rng.range(x0 + 10, x1 - 10), y: rng.range(y0 + 10, y1 - 10), r: rng.range(7, 13) });
         }
         continue;
       }
-      // A plaza with a fountain.
-      if (rng() < 0.08) {
-        lots.push({ kind: 'plaza', x: x0, y: y0, w, h });
-        continue;
+      // Split the block into 1-4 buildings.
+      const cols = rng.chance(0.5) ? 2 : 1;
+      const rows = rng.chance(0.4) ? 2 : 1;
+      const cw = (x1 - x0) / cols;
+      const ch = (y1 - y0) / rows;
+      for (let cx = 0; cx < cols; cx += 1) {
+        for (let cy = 0; cy < rows; cy += 1) {
+          const pad = 12;
+          buildings.push(makeBuilding(
+            rng,
+            x0 + cx * cw + pad, y0 + cy * ch + pad,
+            cw - pad * 2, ch - pad * 2,
+          ));
+        }
       }
-      // Buildings: 2–4 per block, kept off the sidewalk edge and apart.
-      const n = int(rng, 2, 4);
-      const placed = [];
-      for (let i = 0; i < n; i++) {
-        const bw = range(rng, 80, 150);
-        const bh = range(rng, 70, 130);
-        const bx0 = x0 + range(rng, 8, Math.max(9, w - bw - 8));
-        const by0 = y0 + range(rng, 8, Math.max(9, h - bh - 8));
-        const overlap = placed.some(
-          (s) => bx0 < s.x + s.w + 14 && bx0 + bw + 14 > s.x && by0 < s.y + s.h + 14 && by0 + bh + 14 > s.y,
-        );
-        if (overlap) continue;
-        placed.push({ x: bx0, y: by0, w: bw, h: bh });
-        buildings.push({ x: bx0, y: by0, w: bw, h: bh, roof: pick(rng, PALETTE.roofs), tall: rng() < 0.25 });
+      // A few street trees along the block edges.
+      const treeCount = rng.int(2, 5);
+      for (let i = 0; i < treeCount; i += 1) {
+        trees.push({ x: rng.range(x0, x1), y: rng.chance(0.5) ? y0 + 6 : y1 - 6, r: rng.range(6, 10) });
       }
-      // Street trees along the block edge.
-      for (let i = 0; i < 3; i++) {
-        trees.push({ x: x0 + range(rng, 10, w - 10), y: y0 + 4, r: range(rng, 7, 11) });
+      // Parked cars along the block's south kerb.
+      if (rng.chance(0.75)) {
+        const n = rng.int(1, 3);
+        for (let i = 0; i < n; i += 1) {
+          parked.push({
+            x: x0 + 40 + i * 62 + rng.range(-6, 6),
+            y: y1 - 4,
+            angle: Math.PI / 2,
+            model: rng.pick(['sedan', 'coupe', 'pickup', 'taxi', 'van']),
+          });
+        }
       }
     }
   }
 
-  // Named places must stay reachable: clear buildings around them.
-  const clearAround = (cx, cy, radius) => {
-    for (let i = buildings.length - 1; i >= 0; i--) {
-      const b = buildings[i];
-      if (b.x < cx + radius && b.x + b.w > cx - radius && b.y < cy + radius && b.y + b.h > cy - radius) {
-        buildings.splice(i, 1);
-      }
-    }
+  // Extra parked cars near the ferry and the docks, for the first steal.
+  parked.push({ x: 420, y: 2080, angle: 0, model: 'sedan' });
+  parked.push({ x: 420, y: 2140, angle: 0, model: 'coupe' });
+  parked.push({ x: 2520, y: 380, angle: Math.PI / 2, model: 'pickup' });
+  parked.push({ x: 2580, y: 380, angle: Math.PI / 2, model: 'taxi' });
+
+  return { seed, buildings, parks, trees, parked };
+}
+
+// True when a point is on a road (drivable asphalt).
+export function isOnRoad(x, y) {
+  const half = WORLD.roadWidth / 2;
+  for (const rx of ROADS_X) if (Math.abs(x - rx) < half) return true;
+  for (const ry of ROADS_Y) if (Math.abs(y - ry) < half) return true;
+  return false;
+}
+
+// True when a point is in the sea (east of the boardwalk).
+export function isInSea(x, y) {
+  return x > BEACH.seaX;
+}
+
+// True when a point is on the beach sand or the boardwalk.
+export function isOnBeach(x, y) {
+  return x > BEACH.x && x <= BEACH.seaX;
+}
+
+// Snap a point to the nearest road centre line.
+export function nearestRoadPoint(x, y) {
+  let bestX = ROADS_X[0];
+  let bestD = Infinity;
+  for (const rx of ROADS_X) {
+    const d = Math.abs(x - rx);
+    if (d < bestD) { bestD = d; bestX = rx; }
+  }
+  let bestY = ROADS_Y[0];
+  bestD = Infinity;
+  for (const ry of ROADS_Y) {
+    const d = Math.abs(y - ry);
+    if (d < bestD) { bestD = d; bestY = ry; }
+  }
+  return Math.abs(x - bestX) < Math.abs(y - bestY)
+    ? { x: bestX, y, vertical: true }
+    : { x, y: bestY, vertical: false };
+}
+
+// Clamp a point inside the playable world (the sea blocks the east side).
+export function clampToWorld(x, y) {
+  return {
+    x: clamp(x, 20, BEACH.seaX - 10),
+    y: clamp(y, 20, WORLD.height - 20),
   };
-  clearAround(PLACES.safehouse.x, PLACES.safehouse.y, 90);
-  clearAround(PLACES.paintShop.x, PLACES.paintShop.y, 90);
-  clearAround(PLACES.bank.x, PLACES.bank.y, 90);
-  clearAround(PLACES.carLot.x, PLACES.carLot.y, 110);
-  clearAround(PLACES.gunShop.x, PLACES.gunShop.y, 80);
-  clearAround(PLACES.hospital.x, PLACES.hospital.y, 80);
-
-  return { buildings, trees, parks, lots, seed };
 }
 
-// The building a point sits inside, or null.
-export function hitBuilding(city, x, y, pad = 0) {
-  for (const b of city.buildings) {
-    if (x > b.x - pad && x < b.x + b.w + pad && y > b.y - pad && y < b.y + b.h + pad) return b;
-  }
-  return null;
-}
-
-// Push a circle out of the building it overlaps; true when it was inside.
-export function resolveBuildingCollision(city, obj, radius) {
-  const b = hitBuilding(city, obj.x, obj.y, 0);
-  if (!b) return false;
-  const left = obj.x - (b.x - radius);
-  const right = b.x + b.w + radius - obj.x;
-  const top = obj.y - (b.y - radius);
-  const bottom = b.y + b.h + radius - obj.y;
-  const m = Math.min(left, right, top, bottom);
-  if (m === left) obj.x = b.x - radius;
-  else if (m === right) obj.x = b.x + b.w + radius;
-  else if (m === top) obj.y = b.y - radius;
-  else obj.y = b.y + b.h + radius;
-  return true;
-}
-
-export function renderCityBackground(city) {
+// Paint the whole static city once onto an offscreen canvas.
+export function prerenderBackground(city) {
   const canvas = document.createElement('canvas');
-  canvas.width = WORLD_W;
-  canvas.height = WORLD_H;
-  const g = canvas.getContext('2d');
+  canvas.width = WORLD.width;
+  canvas.height = WORLD.height;
+  const ctx = canvas.getContext('2d');
 
-  // Grass base.
-  g.fillStyle = PALETTE.grass;
-  g.fillRect(0, 0, WORLD_W, WORLD_H);
-
-  // Sea, sand and boardwalk along the south edge.
-  g.fillStyle = PALETTE.sand;
-  g.fillRect(0, WORLD_H - 200, WORLD_W, 200);
-  g.fillStyle = PALETTE.sea;
-  g.fillRect(0, WORLD_H - 110, WORLD_W, 110);
-  g.fillStyle = PALETTE.seaDeep;
-  for (let x = 0; x < WORLD_W; x += 90) {
-    g.fillRect(x + 20, WORLD_H - 84, 46, 4);
-    g.fillRect(x + 55, WORLD_H - 52, 30, 4);
-  }
-  g.fillStyle = '#a98f66';
-  g.fillRect(0, WORLD_H - 206, WORLD_W, 8);
-
-  // Parks with ponds, plazas with fountains, docks with piers.
-  for (const p of city.parks) {
-    g.fillStyle = PALETTE.park;
-    g.fillRect(p.x, p.y, p.w, p.h);
-    g.strokeStyle = '#4a7d3c';
-    g.lineWidth = 4;
-    g.strokeRect(p.x + 6, p.y + 6, p.w - 12, p.h - 12);
-    g.fillStyle = '#6fb3c9';
-    g.beginPath();
-    g.ellipse(p.x + p.w / 2, p.y + p.h / 2, 34, 22, 0, 0, Math.PI * 2);
-    g.fill();
-  }
-  for (const l of city.lots) {
-    if (l.kind === 'plaza') {
-      g.fillStyle = PALETTE.plaza;
-      g.fillRect(l.x, l.y, l.w, l.h);
-      g.fillStyle = '#7fb3c9';
-      g.beginPath();
-      g.arc(l.x + l.w / 2, l.y + l.h / 2, 22, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = PALETTE.plaza;
-      g.beginPath();
-      g.arc(l.x + l.w / 2, l.y + l.h / 2, 12, 0, Math.PI * 2);
-      g.fill();
-    } else if (l.kind === 'docks') {
-      g.fillStyle = '#8a7a5c';
-      g.fillRect(l.x, l.y, l.w, l.h);
-      g.fillStyle = '#5d5342';
-      for (let i = 0; i < 5; i++) g.fillRect(l.x + 20 + i * 56, l.y + 30, 34, 90);
-      g.fillStyle = PALETTE.sea;
-      g.fillRect(l.x, l.y + 140, l.w, l.h - 140);
-    }
+  // Base grass.
+  ctx.fillStyle = PALETTE.grass;
+  ctx.fillRect(0, 0, WORLD.width, WORLD.height);
+  // Mow stripes for a little texture.
+  ctx.fillStyle = PALETTE.grassDark;
+  for (let y = 0; y < WORLD.height; y += 80) {
+    if ((y / 80) % 2 === 0) ctx.fillRect(0, y, WORLD.width, 40);
   }
 
-  // Roads: sidewalk border, asphalt, centre dashes, crosswalks.
-  g.fillStyle = PALETTE.sidewalk;
-  for (let x = 0; x <= WORLD_W; x += BLOCK) g.fillRect(x - ROAD_W / 2 - 8, 0, ROAD_W + 16, WORLD_H);
-  for (let y = 0; y <= WORLD_H; y += BLOCK) g.fillRect(0, y - ROAD_W / 2 - 8, WORLD_W, ROAD_W + 16);
-  g.fillStyle = PALETTE.road;
-  for (let x = 0; x <= WORLD_W; x += BLOCK) g.fillRect(x - ROAD_W / 2, 0, ROAD_W, WORLD_H);
-  for (let y = 0; y <= WORLD_H; y += BLOCK) g.fillRect(0, y - ROAD_W / 2, WORLD_W, ROAD_W);
-  g.fillStyle = PALETTE.lane;
-  for (let x = 0; x <= WORLD_W; x += BLOCK) {
-    for (let y = 40; y < WORLD_H; y += 80) g.fillRect(x - 2, y, 4, 34);
+  // Sea and sand on the east edge.
+  ctx.fillStyle = PALETTE.seaDeep;
+  ctx.fillRect(BEACH.seaX, 0, WORLD.width - BEACH.seaX, WORLD.height);
+  ctx.fillStyle = PALETTE.sea;
+  ctx.fillRect(BEACH.seaX - 14, 0, 14, WORLD.height);
+  ctx.fillStyle = PALETTE.sand;
+  ctx.fillRect(BEACH.x, 0, BEACH.seaX - BEACH.x, WORLD.height);
+  // Foam lines where the waves meet the sand.
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 3;
+  for (let y = 40; y < WORLD.height; y += 130) {
+    ctx.beginPath();
+    ctx.moveTo(BEACH.seaX - 6, y);
+    ctx.quadraticCurveTo(BEACH.seaX - 22, y + 22, BEACH.seaX - 4, y + 44);
+    ctx.stroke();
   }
-  for (let y = 0; y <= WORLD_H; y += BLOCK) {
-    for (let x = 40; x < WORLD_W; x += 80) g.fillRect(x, y - 2, 34, 4);
+  // Boardwalk planks.
+  ctx.fillStyle = PALETTE.boardwalk;
+  ctx.fillRect(BEACH.x - 26, 0, 26, WORLD.height);
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 1;
+  for (let y = 0; y < WORLD.height; y += 18) {
+    ctx.beginPath(); ctx.moveTo(BEACH.x - 26, y); ctx.lineTo(BEACH.x, y); ctx.stroke();
   }
-  g.fillStyle = '#d8d2c2';
-  for (let x = 0; x <= WORLD_W; x += BLOCK) {
-    for (let y = 0; y <= WORLD_H; y += BLOCK) {
-      for (let i = -3; i <= 3; i++) {
-        g.fillRect(x + i * 10 - 3, y - ROAD_W / 2 + 4, 6, 12);
-        g.fillRect(x + i * 10 - 3, y + ROAD_W / 2 - 16, 6, 12);
+
+  // Sidewalks: pale strips along every road.
+  ctx.fillStyle = PALETTE.sidewalk;
+  const half = WORLD.roadWidth / 2;
+  for (const rx of ROADS_X) ctx.fillRect(rx - half - 12, 0, WORLD.roadWidth + 24, WORLD.height);
+  for (const ry of ROADS_Y) ctx.fillRect(0, ry - half - 12, WORLD.width, WORLD.roadWidth + 24);
+
+  // Asphalt.
+  ctx.fillStyle = PALETTE.asphalt;
+  for (const rx of ROADS_X) ctx.fillRect(rx - half, 0, WORLD.roadWidth, WORLD.height);
+  for (const ry of ROADS_Y) ctx.fillRect(0, ry - half, WORLD.width, WORLD.roadWidth);
+
+  // Centre dashed lines.
+  ctx.strokeStyle = PALETTE.line;
+  ctx.lineWidth = 3;
+  ctx.setLineDash([26, 22]);
+  for (const rx of ROADS_X) {
+    ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx, WORLD.height); ctx.stroke();
+  }
+  for (const ry of ROADS_Y) {
+    ctx.beginPath(); ctx.moveTo(0, ry); ctx.lineTo(WORLD.width, ry); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Zebra crossings at every intersection.
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  for (const rx of ROADS_X) {
+    for (const ry of ROADS_Y) {
+      for (let i = -3; i <= 3; i += 1) {
+        ctx.fillRect(rx + i * 12 - 4, ry - half - 10, 8, 20);
       }
     }
   }
 
-  // Buildings: drop shadow, wall, coloured roof, skylight, tall-block core.
-  for (const b of city.buildings) {
-    g.fillStyle = 'rgba(0,0,0,0.25)';
-    g.fillRect(b.x + 6, b.y + 8, b.w, b.h);
-    g.fillStyle = '#e8ddc9';
-    g.fillRect(b.x, b.y, b.w, b.h);
-    g.fillStyle = b.roof;
-    g.fillRect(b.x + 5, b.y + 5, b.w - 10, b.h - 10);
-    g.fillStyle = 'rgba(255,255,255,0.25)';
-    g.fillRect(b.x + 12, b.y + 12, Math.max(8, b.w / 4), Math.max(8, b.h / 5));
-    if (b.tall) {
-      g.fillStyle = 'rgba(0,0,0,0.18)';
-      g.fillRect(b.x + b.w * 0.3, b.y + b.h * 0.3, b.w * 0.4, b.h * 0.4);
-      g.fillStyle = '#d8d2c2';
-      g.fillRect(b.x + b.w * 0.35, b.y + b.h * 0.35, b.w * 0.3, b.h * 0.3);
+  // Parks and the plaza.
+  for (const park of city.parks) {
+    ctx.fillStyle = park.plaza ? '#b7d977' : '#69a84f';
+    ctx.fillRect(park.x, park.y, park.w, park.h);
+    ctx.strokeStyle = '#4e7a3a';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(park.x, park.y, park.w, park.h);
+    if (park.plaza) {
+      ctx.fillStyle = '#d9c9a3';
+      ctx.beginPath();
+      ctx.arc(park.x + park.w / 2, park.y + park.h / 2, 52, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#5b8dc9';
+      ctx.beginPath();
+      ctx.arc(park.x + park.w / 2, park.y + park.h / 2, 30, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
-  // Trees with a soft shadow.
-  for (const t of city.trees) {
-    g.fillStyle = 'rgba(0,0,0,0.2)';
-    g.beginPath();
-    g.arc(t.x + 3, t.y + 4, t.r, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#4e8a3f';
-    g.beginPath();
-    g.arc(t.x, t.y, t.r, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#67a854';
-    g.beginPath();
-    g.arc(t.x - 3, t.y - 3, t.r * 0.55, 0, Math.PI * 2);
-    g.fill();
+  // Buildings: roof colour, a darker rim, and a pale skylight.
+  for (const b of city.buildings) {
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(b.x + 5, b.y + 6, b.w, b.h);
+    ctx.fillStyle = b.roof;
+    ctx.globalAlpha = b.shade;
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(b.x + b.w * 0.3, b.y + b.h * 0.3, b.w * 0.4, b.h * 0.4);
   }
 
-  // Coloured ground pads mark the named places so they read from above.
-  const pads = [
-    [PLACES.safehouse, '#7fb069'],
-    [PLACES.paintShop, '#e07a5f'],
-    [PLACES.bank, '#e8c15a'],
-    [PLACES.carLot, '#81b29a'],
-    [PLACES.gunShop, '#9a8c98'],
-    [PLACES.hospital, '#f4f1de'],
-  ];
-  for (const [place, color] of pads) {
-    g.fillStyle = color;
-    g.beginPath();
-    g.arc(place.x, place.y, 52, 0, Math.PI * 2);
-    g.fill();
-    g.strokeStyle = 'rgba(0,0,0,0.25)';
-    g.lineWidth = 4;
-    g.beginPath();
-    g.arc(place.x, place.y, 52, 0, Math.PI * 2);
-    g.stroke();
+  // Trees.
+  for (const t of city.trees) {
+    ctx.fillStyle = '#2f6b2f';
+    ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#4c9a3f';
+    ctx.beginPath(); ctx.arc(t.x - 2, t.y - 2, t.r * 0.65, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // The pier: wooden deck reaching out over the sea.
+  ctx.fillStyle = '#8a6b42';
+  ctx.fillRect(PIER.x - 26, PIER.y - 130, 52, PIER.length + 130);
+  ctx.fillStyle = '#a5825a';
+  ctx.fillRect(PIER.x - 20, PIER.y - 130, 40, PIER.length + 130);
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  for (let y = PIER.y - 130; y < PIER.y + PIER.length; y += 16) {
+    ctx.beginPath(); ctx.moveTo(PIER.x - 20, y); ctx.lineTo(PIER.x + 20, y); ctx.stroke();
+  }
+
+  // Named place pads so the player can spot shops from above.
+  for (const key of Object.keys(PLACES)) {
+    const p = PLACES[key];
+    if (key === 'pier' || key === 'plaza') continue;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 0.22;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.stroke();
   }
 
   return canvas;

@@ -1,174 +1,216 @@
-// The player: on-foot movement and combat, stealing and driving cars,
-// health and ammo. Stealing a stranger's car is a crime; your own cars
-// (bought at Rico's) are free to take.
-import { WORLD_W, WORLD_H } from './config.js';
-import { clamp, dist2 } from './random.js';
-import { resolveBuildingCollision, hitBuilding } from './city.js';
-import { updateCarPhysics } from './vehicles.js';
-import { addWanted } from './police.js';
+// Solmar Bay — Vex Marlowe on foot: walking, running, stealing cars, and
+// pistol combat. Aiming follows the mouse; the player fires with a click.
 
-export function createPlayer(state) {
-  return {
-    x: 560,
-    y: 640,
-    angle: -Math.PI / 2,
-    onFoot: true,
-    inCar: false,
-    car: null,
-    health: 100,
-    maxHealth: 100,
-    ammo: 24,
-    aimAngle: 0,
-    fireCooldown: 0,
-    hurtFlash: 0,
-    walkCycle: 0,
-    moving: false,
-  };
-}
+import { PLAYER, PRICES } from './config.js';
+import { clamp, dist, angleDiff } from './random.js';
+import { clampToWorld, isInSea } from './city.js';
+import { driveCar, carsOverlap, separateCars } from './vehicles.js';
+import { scarePeds } from './pedestrians.js';
+import { addHeat } from './police.js';
 
-export function nearestStealableCar(state, maxDist = 70) {
+// Find the nearest car the player could steal (parked or traffic, not police).
+export function nearestStealableCar(state) {
+  const p = state.player;
   let best = null;
-  let bestD = maxDist * maxDist;
+  let bestD = 70;
   for (const car of state.cars) {
-    if (car.dead || car.police) continue;
-    const d = dist2(state.player.x, state.player.y, car.x, car.y);
-    if (d < bestD) {
-      bestD = d;
-      best = car;
-    }
+    if (car.dead || car.driver === 'police') continue;
+    const d = dist(p.x, p.y, car.x, car.y);
+    if (d < bestD) { bestD = d; best = car; }
   }
   return best;
 }
 
-export function enterCar(state, car) {
+// Try to steal the nearest car. Returns the car or null.
+export function tryStealCar(state) {
+  const car = nearestStealableCar(state);
+  if (!car) return null;
   const p = state.player;
-  p.inCar = true;
-  p.onFoot = false;
-  p.car = car;
-  car.ai = null;
-  state.stats.carsStolen++;
-  if (state.ownedCars.includes(car.id)) {
-    state.showToast(`Driving your ${car.name}.`);
-  } else {
-    addWanted(state, 1, 'Stole a car');
-    state.showToast(`Stole a ${car.name}! The cops noticed.`);
-  }
-  state.audio.click();
+  p.inCar = car;
+  car.driver = 'player';
+  car.parked = false;
+  car.speed = 0;
+  p.x = car.x;
+  p.y = car.y;
+  state.sound.click();
+  addHeat(state, 12, 'car theft');
+  state.toast('You took the ' + car.name + '. The SPPD noticed.', 'bad');
+  return car;
 }
 
+// Step out of the car, on the driver's side.
 export function exitCar(state) {
   const p = state.player;
-  if (!p.car) return;
-  const car = p.car;
-  car.speed = 0;
-  // Step out to the side of the car.
-  p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 26;
-  p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 26;
+  const car = p.inCar;
+  if (!car) return;
+  p.x = car.x - Math.sin(car.angle) * 26;
+  p.y = car.y + Math.cos(car.angle) * 26;
   p.angle = car.angle;
-  p.inCar = false;
-  p.onFoot = true;
-  p.car = null;
+  p.inCar = null;
+  car.driver = 'parked';
+  car.speed = 0;
+  state.sound.click();
 }
 
-export function fireBullet(state) {
+// Fire the pistol at the mouse position. Spawns a tracer bullet and scares
+// nearby pedestrians. Returns true when a shot was actually fired.
+export function tryShoot(state) {
   const p = state.player;
-  if (p.fireCooldown > 0 || p.ammo <= 0) return;
-  p.ammo--;
-  p.fireCooldown = 0.28;
-  const a = p.aimAngle;
+  if (p.inCar || p.ammo <= 0 || p.fireTimer > 0) return false;
+  p.ammo -= 1;
+  p.fireTimer = PLAYER.fireDelay;
+  const angle = Math.atan2(state.input.mouseWorldY - p.y, state.input.mouseWorldX - p.x);
+  p.angle = angle;
   state.bullets.push({
-    x: p.x + Math.cos(a) * 18,
-    y: p.y + Math.sin(a) * 18,
-    vx: Math.cos(a) * 780,
-    vy: Math.sin(a) * 780,
-    life: 0.9,
+    x: p.x + Math.cos(angle) * 18,
+    y: p.y + Math.sin(angle) * 18,
+    vx: Math.cos(angle) * 780,
+    vy: Math.sin(angle) * 780,
+    life: PLAYER.pistolRange / 780,
+    damage: PLAYER.pistolDamage,
     fromPlayer: true,
   });
-  state.audio.shot();
-  state.addParticles(p.x + Math.cos(a) * 22, p.y + Math.sin(a) * 22, 3, '#ffd34d');
-  if (state.wantedStars < 1) addWanted(state, 0.6, 'Fired a weapon in public');
+  state.sound.shot();
+  state.muzzle = 0.06;
+  scarePeds(state.peds, p.x, p.y, 320);
+  // Shooting in public is a crime.
+  addHeat(state, 6, 'shots fired');
+  return true;
 }
 
-export function updatePlayer(state, dt, input, pressed) {
-  const p = state.player;
-  if (p.fireCooldown > 0) p.fireCooldown -= dt;
-  if (p.hurtFlash > 0) p.hurtFlash -= dt;
-
-  // Aim with the mouse: screen space back into world space.
-  const cam = state.camera;
-  const worldMouseX = cam.x + input.mouse.x / cam.zoom;
-  const worldMouseY = cam.y + input.mouse.y / cam.zoom;
-  if (p.onFoot) p.aimAngle = Math.atan2(worldMouseY - p.y, worldMouseX - p.x);
-
-  // Enter / exit a car.
-  if (pressed.has('interact')) {
-    if (p.inCar) {
-      exitCar(state);
+// Move bullets, test hits against rivals, cars and the player, and spawn
+// little impact sparks. Returns 'playerDead' when a rival bullet kills Vex.
+export function updateBullets(state, dt) {
+  for (const b of state.bullets) {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    if (b.life <= 0) { b.dead = true; continue; }
+    if (b.fromPlayer) {
+      for (const rival of state.rivals) {
+        if (rival.dead) continue;
+        if (dist(b.x, b.y, rival.x, rival.y) < 16) {
+          rival.health -= b.damage;
+          b.dead = true;
+          state.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.25, max: 0.25, color: '#ffdd55', size: 4 });
+          if (rival.health <= 0) {
+            rival.dead = true;
+            state.player.money += 25;
+            state.toast('Rival down. +$25 picked up.', 'good');
+            state.sound.cash();
+          }
+          break;
+        }
+      }
+      if (b.dead) continue;
+      for (const car of state.cars) {
+        if (car.dead || car.driver === 'player') continue;
+        const dx = b.x - car.x;
+        const dy = b.y - car.y;
+        const along = Math.abs(dx * Math.cos(car.angle) + dy * Math.sin(car.angle));
+        const across = Math.abs(-dx * Math.sin(car.angle) + dy * Math.cos(car.angle));
+        if (along < car.length / 2 && across < car.width / 2) {
+          b.dead = true;
+          state.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.2, max: 0.2, color: '#ffb347', size: 4 });
+          break;
+        }
+      }
     } else {
-      const car = nearestStealableCar(state);
-      if (car) enterCar(state, car);
+      // Rival bullets can hit Vex on foot or his car.
+      const p = state.player;
+      const tx = p.inCar ? p.inCar.x : p.x;
+      const ty = p.inCar ? p.inCar.y : p.y;
+      if (dist(b.x, b.y, tx, ty) < (p.inCar ? 24 : 13)) {
+        b.dead = true;
+        if (p.inCar) {
+          p.inCar.speed *= 0.7;
+        } else {
+          hurtPlayer(state, b.damage);
+        }
+        state.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.2, max: 0.2, color: '#ef476f', size: 4 });
+      }
     }
   }
+  state.bullets = state.bullets.filter((b) => !b.dead);
+  if (state.player.health <= 0) return 'playerDead';
+  return null;
+}
 
-  if (p.inCar && p.car) {
-    const throttle = (input.keys.has('up') ? 1 : 0) + (input.keys.has('down') ? -0.7 : 0);
-    const steer = (input.keys.has('left') ? -1 : 0) + (input.keys.has('right') ? 1 : 0);
-    updateCarPhysics(state, p.car, dt, { throttle, steer, brake: input.keys.has('brake') });
-    p.x = p.car.x;
-    p.y = p.car.y;
-    p.angle = p.car.angle;
-    state.audio.setEngine(Math.abs(p.car.speed) / p.car.topSpeed, true);
+// Hurt the player (on foot). Armour is not a thing in Solmar Bay: health is
+// health, and the hospital is the only way back up.
+export function hurtPlayer(state, damage) {
+  const p = state.player;
+  if (p.invuln > 0) return;
+  p.health -= damage;
+  p.invuln = 0.25;
+  state.sound.thud();
+  if (p.health <= 0) p.health = 0;
+}
+
+// The per-frame player update: on foot or driving, plus shooting.
+export function updatePlayer(state, dt) {
+  const p = state.player;
+  const input = state.input;
+  p.fireTimer = Math.max(0, p.fireTimer - dt);
+  p.invuln = Math.max(0, p.invuln - dt);
+  state.muzzle = Math.max(0, state.muzzle - dt);
+
+  if (p.inCar) {
+    const car = p.inCar;
+    const axis = input.moveAxis();
+    const throttle = -axis.y; // W is forward
+    const steer = axis.x;
+    const handbrake = input.held('Space');
+    const prevSpeed = Math.abs(car.speed);
+    driveCar(car, throttle, steer, dt, handbrake);
+    if (handbrake && prevSpeed > 180) state.sound.skid();
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = car.angle;
+    // Car-to-car bumps.
+    for (const other of state.cars) {
+      if (other === car || other.dead) continue;
+      if (carsOverlap(car, other)) {
+        separateCars(car, other);
+        if (Math.abs(car.speed) > 140) {
+          state.sound.thud();
+          addHeat(state, 4, 'hit and run');
+        }
+      }
+    }
+    // Running over a pedestrian is a serious crime.
+    for (const ped of state.peds) {
+      if (dist(car.x, car.y, ped.x, ped.y) < 22 && Math.abs(car.speed) > 60) {
+        ped.fleeing = 3;
+        ped.fleeX = ped.x + (ped.x - car.x) * 3;
+        ped.fleeY = ped.y + (ped.y - car.y) * 3;
+        addHeat(state, 10, 'hit a pedestrian');
+      }
+    }
+    if (input.pressed('KeyE')) exitCar(state);
     return;
   }
 
-  state.audio.setEngine(0, false);
-  // On foot: WASD movement, Shift to sprint.
-  let mx = (input.keys.has('right') ? 1 : 0) - (input.keys.has('left') ? 1 : 0);
-  let my = (input.keys.has('down') ? 1 : 0) - (input.keys.has('up') ? 1 : 0);
-  const len = Math.hypot(mx, my);
-  p.moving = len > 0;
-  if (len > 0) {
-    mx /= len;
-    my /= len;
-    const speed = input.keys.has('sprint') ? 250 : 165;
-    const nx = p.x + mx * speed * dt;
-    const ny = p.y + my * speed * dt;
-    if (!hitBuilding(state.city, nx, p.y, 10)) p.x = nx;
-    if (!hitBuilding(state.city, p.x, ny, 10)) p.y = ny;
-    p.x = clamp(p.x, 16, WORLD_W - 16);
-    p.y = clamp(p.y, 16, WORLD_H - 16);
-    resolveBuildingCollision(state.city, p, 10);
-    p.angle = Math.atan2(my, mx);
-    p.walkCycle += dt * 10;
+  // On foot: WASD moves, Shift runs, mouse aims, click shoots.
+  const axis = input.moveAxis();
+  const len = Math.sqrt(axis.x * axis.x + axis.y * axis.y) || 1;
+  const speed = input.running() ? PLAYER.runSpeed : PLAYER.walkSpeed;
+  p.x += (axis.x / len) * speed * dt * (axis.x || axis.y ? 1 : 0);
+  p.y += (axis.y / len) * speed * dt * (axis.x || axis.y ? 1 : 0);
+  if (axis.x || axis.y) {
+    p.moveAngle = Math.atan2(axis.y, axis.x);
+    p.walking = true;
+    p.walkPhase += dt * (input.running() ? 13 : 9);
+  } else {
+    p.walking = false;
   }
-
-  // Shoot with the mouse.
-  if (input.mouse.down) fireBullet(state);
-
-  // Pick up cash, health and ammo lying around.
-  for (const pk of state.pickups) {
-    if (pk.dead) continue;
-    if (dist2(p.x, p.y, pk.x, pk.y) >= 30 * 30) continue;
-    pk.dead = true;
-    if (pk.kind === 'cash') {
-      state.money += pk.amount;
-      state.showToast(`+$${pk.amount}`);
-    } else if (pk.kind === 'health') {
-      p.health = Math.min(p.maxHealth, p.health + 40);
-      state.showToast('Health +40');
-    } else {
-      p.ammo += 24;
-      state.showToast('Ammo +24');
-    }
-    state.audio.pickup();
-  }
-  state.pickups = state.pickups.filter((pk) => !pk.dead);
-}
-
-export function damagePlayer(state, amount, source) {
-  const p = state.player;
-  if (p.hurtFlash > 0.35) return;
-  p.health = Math.max(0, p.health - amount);
-  p.hurtFlash = 0.5;
-  state.showToast(`Hit by ${source}!`);
+  // Aim at the mouse.
+  p.angle = Math.atan2(input.mouseWorldY - p.y, input.mouseWorldX - p.x);
+  const clamped = clampToWorld(p.x, p.y);
+  p.x = clamped.x;
+  p.y = clamped.y;
+  // The sea is a wall for a pedestrian.
+  if (isInSea(p.x, p.y)) p.x = 3036;
+  if (input.mouseDown || input.mouseClicked) tryShoot(state);
+  if (input.pressed('KeyE')) tryStealCar(state);
 }

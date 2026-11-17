@@ -4,85 +4,113 @@
 [![rank](https://make.fun/badge/gta6-01/Saripudin7/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![reward](https://make.fun/badge/gta6-01/Saripudin7/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-An original open-world crime game for the [make.fun gta6-01 bounty](https://make.fun/bounty/gta6-01) — a sun-soaked coastal city you explore on foot and by car, with traffic, pedestrians, a wanted level and police chases, five story missions, combat, shops and a living economy. Nothing here is from any commercial game: the city, characters, vehicles, names, story, art and sounds are all original.
+An original open-world crime game that runs offline in a desktop browser.
+Vex Marlowe steps off the ferry in Solmar Bay — a sun-soaked coastal city
+of grid streets, a beach boardwalk, an old pier and the North Docks — with
+$120, a pistol and a phone number for a fixer named Rico. Five story jobs
+stand between him and the gold in Bayfront Bank, and the Solmar Bay Police
+Department stands between him and all of it.
 
-## Play
+## How to play
 
-Serve the `game/` folder with any static server and open `index.html` in a desktop browser:
+Serve the game and open it in a desktop browser:
 
 ```sh
 node serve.ts
 # then open http://localhost:8080
 ```
 
-No build step, no network requests — every file the game loads is under `game/`.
+No build step, no network request, no external assets: every file the game
+loads lives under `game/`, and every sound is synthesized live with WebAudio.
+A saved game is kept in `localStorage` — save at the Safehouse, or finish a
+mission, and your cash, health, ammo and progress will be waiting for you.
 
 ## Controls
 
 | Input | Action |
-|---|---|
-| WASD / arrows | Move on foot, drive a car |
-| Shift | Sprint |
-| E | Steal the nearest car / exit a car / use a shop |
-| Mouse | Aim |
-| Left click | Fire your pistol |
+| --- | --- |
+| WASD / arrows | Walk, or drive the car |
+| Mouse | Aim the pistol (on foot) |
+| Left click | Shoot |
+| E | Steal / enter / exit a car, use a shop, grab a package |
+| Hold E | Crack the bank vault |
 | Space | Handbrake |
-| M | Mission list |
+| Shift | Run on foot |
 | P / Esc | Pause |
-| N | Mute |
+| M | Mission list (press 1–5 to start a job) |
+| N | Mute / unmute sound |
 
-## The game
+## The story
 
-You are Vex Marlowe, a driver fresh off the ferry in Solmar Bay. Work five jobs for Rico and the crew:
-
-1. **First Wheels** — steal a car and bring it to Paint & Repair.
-2. **The Pickup** — collect a package at the Old Pier, deliver it to the Safehouse.
-3. **Hot Delivery** — a 90-second timed run to the North Docks, with heat on you.
-4. **The Getaway** — lose a 3-star police response, then lay low at the Safehouse.
-5. **Bayfront Job** — hold up Bayfront Bank and outrun the SPPD.
-
-Crimes raise your wanted level (up to 5 stars) and the Solmar Police Department sends cruisers after you. Lose them to cool down, or pay $150 at Paint & Repair. Spend mission money at Rico's Motors (buy faster cars), Harbor Arms (ammo), St. Marina Hospital (treatment) and the Safehouse (save). Getting busted costs a $150 fine; getting wasted costs a $100 hospital bill.
+1. **First Wheels** — steal any car on the street and bring it to Paint
+   & Repair so Rico's crew can make it clean.
+2. **The Pickup** — collect a package at the Old Pier and deliver it to
+   the Safehouse, past the rival watching the docks.
+3. **Hot Delivery** — ninety seconds to the North Docks, with the SPPD
+   joining the chase halfway there.
+4. **The Getaway** — three stars and the whole department awake. Lose
+   them, then get back to the Safehouse in one piece.
+5. **Bayfront Job** — hold the floor at Bayfront Bank, crack the vault,
+   and outrun a three-star response with the gold.
 
 ## Systems
 
-- **City** — a procedurally laid-out grid city (seeded): roads, crosswalks, building blocks, parks, a beach boardwalk and docks, pre-rendered once for speed.
-- **Traffic & pedestrians** — cars follow lanes and turn at intersections; pedestrians walk the sidewalks and flee gunfire and speeding cars.
-- **Wanted & police** — heat decays out of sight; cruisers spawn to match the star level, chase and ram, with flashing light bars and sirens.
-- **Missions & story** — five linked jobs with markers, timers, armed rivals and payouts.
-- **Economy** — money, car purchases, ammo, treatment, cop payoffs, pickups.
-- **HUD** — live minimap with mission and police blips, wanted stars, health, ammo, speedometer, objective tracker and toasts.
-- **Save** — progress saves at the Safehouse (localStorage) and after every mission.
-- **Sound** — fully synthesized WebAudio: engine hum, sirens, gunshots, chimes.
+- **A living city.** A seeded procedural grid: roads, zebra crossings,
+  building blocks, parks, the Marina Plaza fountain, the beach, the
+  boardwalk and the pier. The same seed always builds the same city.
+- **Traffic and pedestrians.** Cars follow the road grid, keep their
+  lane and turn at intersections. Pedestrians stroll the sidewalks and
+  run from gunfire and speeding cars.
+- **Wanted level, 0–5 stars.** Theft, shootings and hit-and-runs raise
+  the heat; it cools when no cruiser can see you. Cruisers spawn to
+  match the stars, chase, ram, flash their strobes and wail their
+  sirens. Get caught on foot and you pay a $150 fine; go down and St.
+  Marina charges you $100.
+- **Combat.** A pistol aimed with the mouse, rival gunmen who fire in
+  bursts at the pier and the bank, and tracer bullets with impact
+  sparks.
+- **Economy.** Buy cars at Rico's Motors, ammo at Harbor Arms, treatment
+  at St. Marina Hospital, a fresh paint job at Paint & Repair to lose
+  the heat, and save for free at the Safehouse.
+- **HUD.** Wanted stars, health, cash, ammo, a speedometer, an
+  objective tracker, toasts, and a live minimap with the mission
+  diamond, police blips and shop markers.
+- **Sound.** Engine hum, two-tone sirens, gunshots, skid squeals,
+  mission chimes and cash-register ka-chings — all synthesized, no
+  audio files.
 
 ## Layout
 
-```
+```text
 game/
-  index.html          entry point (loads src/main.js)
+  index.html          the page: canvas + module script
   src/
-    main.js           bootstrap, game loop, menus, save wiring
     config.js         constants, places, car models, mission defs
     random.js         seeded RNG
     input.js          keyboard + mouse
     audio.js          synthesized WebAudio sounds
-    city.js           city generation + pre-rendered background
-    vehicles.js       car physics, traffic AI, police driving AI
+    city.js           city generation + prerendered background
+    vehicles.js       driving physics, traffic AI, police driving
     pedestrians.js    pedestrian AI
     police.js         wanted system + cruiser spawning
-    player.js         on-foot movement, stealing, combat
-    missions.js       five story missions, rivals, bullets
-    economy.js        shops, car lot, payoffs
-    render.js         world rendering + camera
-    hud.js            HUD, minimap, menus
-    save.js           localStorage save/load
-    shots.js          screenshot staging (?shot=)
-main.ts               hands the game in (copies game/ + screenshots/, writes dossier.json)
-vendor/makefun-game.ts  make.fun dossier library (kit copy, unchanged)
-screenshots/         3–4 real browser renders of the game
+    player.js         walking, stealing, pistol combat
+    missions.js       the five story missions + rival gunmen
+    economy.js        shops, the car lot, fines and bills
+    render.js         world + camera rendering
+    hud.js            HUD, minimap and menus
+    save.js           localStorage save / load
+    shots.js          screenshot staging (?shot= + __shotReady)
+    main.js           bootstrap, game loop, screens
+main.ts               copies game/ + screenshots/ to /output, writes dossier.json
+serve.ts              tiny static server for local play
+screenshots/          four real in-browser renders of the game
 ```
 
-Screenshots are staged with `?shot=start|drive|chase|foot&seed=N` — each one runs the real game forward from a staged state and sets `window.__shotReady`.
+Screenshots are staged with `?shot=cover|drive|chase|foot&seed=…`; each
+scene plays the real game forward and sets `window.__shotReady` when the
+frame is drawn.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Solmar Bay, Vex Marlowe, Rico and the SPPD
+are original creations; nothing here comes from any commercial game.

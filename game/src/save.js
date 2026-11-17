@@ -1,30 +1,35 @@
-// Save / load through localStorage. The save stores money, story
-// progress, owned cars and the player's position — never live traffic,
-// so loading always starts from a clean, working street.
+// Solmar Bay — saving: a small JSON snapshot in localStorage, written at
+// the Safehouse and after every finished mission, read back on load.
+
 import { SAVE_KEY } from './config.js';
 
+// Turn the live state into a plain save object.
+export function snapshotState(state) {
+  return {
+    version: 1,
+    money: Math.round(state.player.money),
+    health: Math.round(state.player.health),
+    ammo: state.player.ammo,
+    missionsDone: state.missionsDone,
+    missionIndex: state.missionIndex,
+    ownedCars: state.ownedCars.slice(),
+    playerX: Math.round(state.player.x),
+    playerY: Math.round(state.player.y),
+    savedAt: Date.now(),
+  };
+}
+
+// Write the snapshot. Returns true on success.
 export function saveGame(state) {
   try {
-    const p = state.player;
-    const data = {
-      version: 1,
-      money: state.money,
-      missionIndex: state.missions.index,
-      missionsDone: state.missions.done,
-      ownedModels: state.ownedModels,
-      x: p.x,
-      y: p.y,
-      health: p.health,
-      ammo: p.ammo,
-      savedAt: new Date().toISOString(),
-    };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(snapshotState(state)));
     return true;
-  } catch {
+  } catch (err) {
     return false;
   }
 }
 
+// Read the snapshot back, or null when there is no save yet.
 export function loadGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
@@ -32,15 +37,30 @@ export function loadGame() {
     const data = JSON.parse(raw);
     if (!data || data.version !== 1) return null;
     return data;
-  } catch {
+  } catch (err) {
     return null;
   }
 }
 
+// Apply a loaded snapshot onto a fresh state.
+export function applySave(state, data) {
+  if (!data) return;
+  state.player.money = data.money;
+  state.player.health = data.health;
+  state.player.ammo = data.ammo;
+  state.missionsDone = data.missionsDone || 0;
+  state.missionIndex = data.missionIndex || 0;
+  state.ownedCars = data.ownedCars || [];
+  state.player.x = data.playerX;
+  state.player.y = data.playerY;
+  state.hasSave = true;
+}
+
+// Delete the save (used from the title screen's fresh start).
 export function clearSave() {
   try {
     localStorage.removeItem(SAVE_KEY);
-  } catch {
-    // Storage unavailable — nothing to clear.
+  } catch (err) {
+    // A missing save is not an error worth showing.
   }
 }

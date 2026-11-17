@@ -1,310 +1,267 @@
-// Story missions: five linked jobs across Solmar Bay. Each mission is a
-// small state machine with a target marker, a timer where it fits, armed
-// rivals, and a payout. Bullets (player and rival) are resolved here too.
-import { PLACES, MISSION_DEFS } from './config.js';
-import { dist2 } from './random.js';
-import { addWanted } from './police.js';
-import { damagePlayer } from './player.js';
-import { hitBuilding } from './city.js';
-import { shootPed } from './pedestrians.js';
+// Solmar Bay — the five story missions for Rico and his crew, plus the
+// rival gunmen who guard the pier and the bank. Missions are a small state
+// machine: each one has stages, a target place, and a win/fail check.
 
-export function createMissionState(state) {
+import { MISSIONS, PLACES, PLAYER } from './config.js';
+import { dist } from './random.js';
+import { addHeat, clearWanted } from './police.js';
+import { makeCar } from './vehicles.js';
+
+// A rival gunman: stands his ground, shoots at Vex when close.
+export function makeRival(x, y) {
   return {
-    index: state.save ? state.save.missionIndex : 0,
-    stage: 0,
-    timer: 0,
-    target: null, // {x, y, label}
-    active: false,
-    banner: '',
-    bannerTimer: 0,
-    nextTimer: 0,
-    done: state.save ? state.save.missionsDone : [],
-    completedAll: false,
-    robTimer: 0,
-    rivals: [],
+    x, y, angle: 0, health: 100, dead: false,
+    fireTimer: 1.2, burst: 0, burstTimer: 0,
+    homeX: x, homeY: y,
   };
 }
 
+// Start mission number `index` (0-based). Resets the mission state.
 export function startMission(state, index) {
-  const m = state.missions;
-  const def = MISSION_DEFS[index];
-  if (!def) return;
-  m.index = index;
-  m.stage = 0;
-  m.active = true;
-  m.timer = 0;
-  m.robTimer = 0;
-  m.rivals = [];
-  setTarget(state, def, 0);
-  m.banner = def.title;
-  m.bannerTimer = 4;
-  state.showToast(def.brief);
-  state.audio.missionDone();
-}
-
-export function setTarget(state, def, stage) {
-  const m = state.missions;
-  const P = PLACES;
-  if (def.id === 'first-wheels') {
-    m.target = stage === 0 ? { x: P.paintShop.x, y: P.paintShop.y, label: 'Paint & Repair' } : null;
-  } else if (def.id === 'the-pickup') {
-    m.target = stage === 0
-      ? { x: P.pier.x, y: P.pier.y, label: 'Old Pier — pick up the package' }
-      : { x: P.safehouse.x, y: P.safehouse.y, label: 'Safehouse — deliver the package' };
-  } else if (def.id === 'hot-delivery') {
-    if (stage === 0) {
-      m.timer = 90;
-      m.target = { x: P.docks.x, y: P.docks.y, label: 'North Docks — 90 seconds!' };
-      addWanted(state, 1, 'Spotted with hot cargo');
-    }
-  } else if (def.id === 'the-getaway') {
-    if (stage === 0) {
-      addWanted(state, 3, 'Tripped an alarm');
-      m.target = null;
-    } else {
-      m.target = { x: P.safehouse.x, y: P.safehouse.y, label: 'Safehouse — lay low' };
-    }
-  } else if (def.id === 'bayfront-job') {
-    if (stage === 0) {
-      m.target = { x: P.bank.x, y: P.bank.y, label: 'Bayfront Bank — hold it up (stand here)' };
-      m.robTimer = 5;
-      spawnRivals(state, P.bank.x, P.bank.y, 3);
-    } else {
-      m.target = { x: P.safehouse.x, y: P.safehouse.y, label: 'Safehouse — escape!' };
-    }
-  } else {
-    m.target = null;
+  const def = MISSIONS[index];
+  state.missionIndex = index;
+  state.mission = {
+    def,
+    stage: 0,
+    timer: def.timeLimit || 0,
+    surviveLeft: def.survive || 0,
+    robProgress: 0,
+    done: false,
+    failed: false,
+    packageHeld: false,
+    targetKey: def.place,
+    text: def.brief,
+  };
+  state.objective = def.hint;
+  state.toast('Mission ' + def.id + ': ' + def.title, 'mission');
+  state.sound.chime();
+  // Mission 3 opens with the package already in the car: jump to the drive.
+  if (def.id === 3) {
+    state.mission.stage = 1;
+    state.mission.targetKey = 'docks';
+    state.objective = 'Reach the North Docks before the timer runs out!';
+  }
+  // Mission 4 starts hot: three stars from the first second.
+  if (def.id === 4) {
+    addHeat(state, 62, 'the getaway');
+    state.mission.stage = 1;
+    state.objective = 'Lose the SPPD, then get to the Safehouse.';
+  }
+  // Mission 5 posts two rivals at the bank doors.
+  if (def.id === 5) {
+    state.rivals.push(makeRival(PLACES.bank.x - 70, PLACES.bank.y - 60));
+    state.rivals.push(makeRival(PLACES.bank.x + 60, PLACES.bank.y + 70));
+    state.mission.stage = 1;
+  }
+  // Mission 2 posts one rival guarding the pier package.
+  if (def.id === 2) {
+    state.rivals.push(makeRival(PLACES.pier.x - 40, PLACES.pier.y - 90));
   }
 }
 
-function spawnRivals(state, x, y, n) {
-  for (let i = 0; i < n; i++) {
-    state.missions.rivals.push({
-      x: x + (state.rng() - 0.5) * 160,
-      y: y + (state.rng() - 0.5) * 160,
-      health: 3,
-      fireCooldown: 1 + state.rng(),
-      shirt: '#3a3a3a',
-      dead: false,
+// Finish the active mission: pay out, save, and offer the next one.
+export function completeMission(state) {
+  const m = state.mission;
+  if (!m || m.done) return;
+  m.done = true;
+  const payout = m.def.reward + (m.def.id === 5 ? 1500 : 0);
+  state.player.money += payout;
+  state.sound.chime();
+  state.sound.cash();
+  // A burst of gold sparks over Vex so the payout is visible, not just a number.
+  for (let i = 0; i < 14; i += 1) {
+    const a = (i / 14) * Math.PI * 2;
+    state.particles.push({
+      x: state.player.x, y: state.player.y,
+      vx: Math.cos(a) * 120, vy: Math.sin(a) * 120,
+      life: 0.7, max: 0.7, color: '#ffd166', size: 4,
     });
   }
+  state.toast('Mission complete: ' + m.def.title + '  +$' + payout, 'good');
+  state.objective = 'Mission complete! Press M to start the next job.';
+  state.missionsDone += 1;
+  state.saveGame();
+  clearWanted(state);
 }
 
-function completeMission(state) {
-  const m = state.missions;
-  const def = MISSION_DEFS[m.index];
-  state.money += def.payout;
-  m.done.push(def.id);
-  m.active = false;
-  m.target = null;
-  m.rivals = [];
-  m.banner = `${def.title} — DONE! +$${def.payout}`;
-  m.bannerTimer = 4;
-  state.audio.missionDone();
-  state.showToast(`Mission complete! +$${def.payout}`);
-  state.stats.missionsDone++;
-  if (state.saveGame) state.saveGame();
-  if (m.index + 1 < MISSION_DEFS.length) {
-    m.nextTimer = 3;
-  } else {
-    m.completedAll = true;
-    state.mode = 'complete';
+// Fail the active mission: heat stays, the job can be retried from M.
+export function failMission(state, reason) {
+  const m = state.mission;
+  if (!m || m.done || m.failed) return;
+  m.failed = true;
+  state.sound.fail();
+  state.toast('Mission failed: ' + reason + ' — press M to retry.', 'bad');
+  state.objective = 'Mission failed. Press M to try again.';
+  state.rivals = [];
+}
+
+// The current objective marker position (world coordinates).
+export function missionTargetPos(state) {
+  const m = state.mission;
+  if (!m || m.done || m.failed) return null;
+  const place = PLACES[m.targetKey];
+  return place ? { x: place.x, y: place.y, name: place.name } : null;
+}
+
+// Rival gunmen: hold position, aim at Vex, fire in short bursts.
+export function updateRivals(state, dt) {
+  const p = state.player;
+  for (const rival of state.rivals) {
+    if (rival.dead) continue;
+    const d = dist(rival.x, rival.y, p.x, p.y);
+    const tx = p.inCar ? p.inCar.x : p.x;
+    const ty = p.inCar ? p.inCar.y : p.y;
+    rival.angle = Math.atan2(ty - rival.y, tx - rival.x);
+    // Drift back toward home if Vex drags them far away.
+    const home = dist(rival.x, rival.y, rival.homeX, rival.homeY);
+    if (home > 160) {
+      rival.x += (rival.homeX - rival.x) / home * 40 * dt;
+      rival.y += (rival.homeY - rival.y) / home * 40 * dt;
+    }
+    if (d > 520) continue;
+    rival.fireTimer -= dt;
+    if (rival.burst > 0) {
+      rival.burstTimer -= dt;
+      if (rival.burstTimer <= 0) {
+        rival.burst -= 1;
+        rival.burstTimer = 0.16;
+        const spread = (state.rng.next() - 0.5) * 0.3;
+        const a = rival.angle + spread;
+        state.bullets.push({
+          x: rival.x + Math.cos(a) * 18, y: rival.y + Math.sin(a) * 18,
+          vx: Math.cos(a) * 640, vy: Math.sin(a) * 640,
+          life: 0.8, damage: 9, fromPlayer: false,
+        });
+        state.sound.shot();
+      }
+    } else if (rival.fireTimer <= 0 && d < 460) {
+      rival.burst = 3;
+      rival.burstTimer = 0;
+      rival.fireTimer = 1.6 + state.rng.next() * 0.8;
+    }
   }
+  state.rivals = state.rivals.filter((r) => !r.dead || r.deadTimer > 0);
+  for (const r of state.rivals) if (r.dead) r.deadTimer = (r.deadTimer || 0) + dt;
+  state.rivals = state.rivals.filter((r) => !r.dead || (r.deadTimer || 0) < 8);
 }
 
-function failMission(state, reason) {
-  const m = state.missions;
-  m.active = false;
-  m.target = null;
-  m.rivals = [];
-  m.banner = `Mission failed — ${reason}`;
-  m.bannerTimer = 4;
-  state.showToast(`Mission failed: ${reason}. Press M to retry.`);
-}
-
-export function retryMission(state) {
-  startMission(state, state.missions.index);
-}
-
+// The mission state machine, run once per frame.
 export function updateMissions(state, dt) {
-  const m = state.missions;
-  if (m.bannerTimer > 0) m.bannerTimer -= dt;
-  if (m.nextTimer > 0) {
-    m.nextTimer -= dt;
-    if (m.nextTimer <= 0) {
-      m.nextTimer = 0;
-      startMission(state, m.index + 1);
+  const m = state.mission;
+  if (!m || m.done || m.failed) return;
+  const p = state.player;
+  const id = m.def.id;
+
+  // Mission 1: steal a car, then drive it to Paint & Repair.
+  if (id === 1) {
+    if (m.stage === 0) {
+      if (p.inCar) {
+        m.stage = 1;
+        m.targetKey = 'paint';
+        state.objective = 'Drive the stolen car to Paint & Repair.';
+        state.toast('Nice wheels. Now get it to Paint & Repair.', 'mission');
+      }
+      return;
+    }
+    const place = PLACES.paint;
+    if (p.inCar && dist(p.x, p.y, place.x, place.y) < place.radius) {
+      completeMission(state);
     }
     return;
   }
-  if (!m.active) return;
-  const def = MISSION_DEFS[m.index];
-  const p = state.player;
-  const px = p.inCar && p.car ? p.car.x : p.x;
-  const py = p.inCar && p.car ? p.car.y : p.y;
 
-  // Timed mission countdown.
-  if (def.id === 'hot-delivery' && m.stage === 0) {
-    m.timer -= dt;
-    if (m.timer <= 0) {
-      failMission(state, 'the delivery was late');
+  // Mission 2: fetch the package at the pier, deliver it to the Safehouse.
+  if (id === 2) {
+    if (m.stage === 0) {
+      const place = PLACES.pier;
+      if (dist(p.x, p.y, place.x, place.y) < place.radius && state.input.pressed('KeyE')) {
+        m.packageHeld = true;
+        m.stage = 1;
+        m.targetKey = 'safehouse';
+        state.objective = 'Package secured. Deliver it to the Safehouse.';
+        state.sound.pickup();
+        state.toast('Package grabbed. Do not stop for anyone.', 'mission');
+      }
       return;
     }
-  }
-
-  // Rivals shoot at the player and close in when far away.
-  for (const r of m.rivals) {
-    if (r.dead) continue;
-    r.fireCooldown -= dt;
-    const d = Math.hypot(px - r.x, py - r.y);
-    if (d < 420 && r.fireCooldown <= 0) {
-      r.fireCooldown = 1.4;
-      const a = Math.atan2(py - r.y, px - r.x);
-      state.bullets.push({
-        x: r.x + Math.cos(a) * 16,
-        y: r.y + Math.sin(a) * 16,
-        vx: Math.cos(a) * 520,
-        vy: Math.sin(a) * 520,
-        life: 1.2,
-        fromPlayer: false,
-      });
-      state.audio.shot();
-    }
-    if (d > 300) {
-      const a = Math.atan2(py - r.y, px - r.x);
-      r.x += Math.cos(a) * 40 * dt;
-      r.y += Math.sin(a) * 40 * dt;
-    }
-  }
-  m.rivals = m.rivals.filter((r) => !r.dead);
-
-  // Stage logic, one branch per mission.
-  if (def.id === 'first-wheels') {
-    if (m.target && p.inCar && dist2(px, py, m.target.x, m.target.y) < 90 * 90) completeMission(state);
-  } else if (def.id === 'the-pickup') {
-    if (m.stage === 0 && m.target && dist2(px, py, m.target.x, m.target.y) < 70 * 70) {
-      m.stage = 1;
-      state.showToast('Package picked up! Bring it to the Safehouse.');
-      state.audio.pickup();
-      setTarget(state, def, 1);
-    } else if (m.stage === 1 && m.target && dist2(px, py, m.target.x, m.target.y) < 90 * 90) {
+    const place = PLACES.safehouse;
+    if (dist(p.x, p.y, place.x, place.y) < place.radius) {
       completeMission(state);
     }
-  } else if (def.id === 'hot-delivery') {
-    if (m.target && dist2(px, py, m.target.x, m.target.y) < 90 * 90) completeMission(state);
-  } else if (def.id === 'the-getaway') {
-    if (m.stage === 0 && state.wantedStars === 0) {
-      m.stage = 1;
-      setTarget(state, def, 1);
-      state.showToast('You lost them! Now reach the Safehouse.');
-    } else if (m.stage === 1 && m.target && dist2(px, py, m.target.x, m.target.y) < 90 * 90) {
+    return;
+  }
+
+  // Mission 3: ninety seconds to the North Docks; police join halfway.
+  if (id === 3) {
+    m.timer -= dt;
+    state.missionTimer = m.timer;
+    if (m.timer < 45 && !m.policeSent) {
+      m.policeSent = true;
+      addHeat(state, 45, 'speeding delivery');
+      state.toast('SPPD on your tail! Keep driving!', 'bad');
+    }
+    if (m.timer <= 0) {
+      failMission(state, 'Out of time — the buyer walked away.');
+      return;
+    }
+    const place = PLACES.docks;
+    if (dist(p.x, p.y, place.x, place.y) < place.radius) {
       completeMission(state);
     }
-  } else if (def.id === 'bayfront-job') {
-    if (m.stage === 0) {
-      const atBank = m.target && dist2(px, py, m.target.x, m.target.y) < 80 * 80;
-      if (atBank) {
-        m.robTimer -= dt;
-        if (m.robTimer <= 0) {
-          m.stage = 1;
-          addWanted(state, 3, 'Robbed Bayfront Bank');
-          state.showToast('Vault emptied! Run for the Safehouse!');
-          setTarget(state, def, 1);
+    return;
+  }
+
+  // Mission 4: survive the three-star response, then reach the Safehouse.
+  if (id === 4) {
+    if (m.stage === 1) {
+      if (state.wanted === 0) {
+        m.stage = 2;
+        m.targetKey = 'safehouse';
+        state.objective = 'Heat is gone. Get to the Safehouse.';
+        state.toast('You shook them. Now get home.', 'good');
+      }
+      return;
+    }
+    const place = PLACES.safehouse;
+    if (dist(p.x, p.y, place.x, place.y) < place.radius) {
+      completeMission(state);
+    }
+    return;
+  }
+
+  // Mission 5: hold E in the bank to crack the vault, then escape to the Safehouse.
+  if (id === 5) {
+    if (m.stage === 1) {
+      const place = PLACES.bank;
+      const inside = dist(p.x, p.y, place.x, place.y) < place.radius;
+      if (inside && !p.inCar && state.input.held('KeyE')) {
+        m.robProgress += dt;
+        state.objective = 'Cracking the vault… ' + Math.ceil(5 - m.robProgress) + 's — hold E!';
+        if (m.robProgress >= 5) {
+          m.stage = 2;
+          m.targetKey = 'safehouse';
+          state.objective = 'Vault open! Lose the SPPD and reach the Safehouse.';
+          addHeat(state, 65, 'bank robbery');
+          state.sound.cash();
+          state.toast('You got the gold! Now run!', 'mission');
         }
       } else {
-        m.robTimer = 5;
+        m.robProgress = Math.max(0, m.robProgress - dt * 2);
+        if (!inside) state.objective = 'Get inside Bayfront Bank and hold E to crack the vault.';
       }
-    } else if (m.target && dist2(px, py, m.target.x, m.target.y) < 90 * 90) {
+      return;
+    }
+    if (m.stage === 2) {
+      if (state.wanted === 0) {
+        m.stage = 3;
+        state.objective = 'Heat is gone. Get to the Safehouse with the gold.';
+      }
+      return;
+    }
+    const place = PLACES.safehouse;
+    if (dist(p.x, p.y, place.x, place.y) < place.radius) {
       completeMission(state);
     }
+    return;
   }
-}
-
-export function updateBullets(state, dt) {
-  for (const b of state.bullets) {
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    b.life -= dt;
-    if (b.life <= 0) {
-      b.dead = true;
-      continue;
-    }
-    if (hitBuilding(state.city, b.x, b.y, 0)) {
-      b.dead = true;
-      state.addParticles(b.x, b.y, 4, '#d8d2c2');
-      continue;
-    }
-    if (b.fromPlayer) {
-      // Hit a pedestrian.
-      for (const ped of state.peds) {
-        if (ped.dead) continue;
-        if (dist2(b.x, b.y, ped.x, ped.y) < 16 * 16) {
-          b.dead = true;
-          state.stats.kills++;
-          shootPed(state, ped);
-          addWanted(state, 0.5, 'Shot a civilian');
-          break;
-        }
-      }
-      if (b.dead) continue;
-      // Hit a rival.
-      for (const r of state.missions.rivals) {
-        if (r.dead) continue;
-        if (dist2(b.x, b.y, r.x, r.y) < 18 * 18) {
-          b.dead = true;
-          r.health--;
-          state.addParticles(b.x, b.y, 5, '#c0392b');
-          if (r.health <= 0) {
-            r.dead = true;
-            state.stats.kills++;
-            state.money += 50;
-            state.showToast('Rival down +$50');
-          }
-          break;
-        }
-      }
-      if (b.dead) continue;
-      // Hit a police cruiser: damages it and raises the heat.
-      for (const car of state.cars) {
-        if (car.dead || !car.police) continue;
-        if (dist2(b.x, b.y, car.x, car.y) < 26 * 26) {
-          b.dead = true;
-          car.smoke = 2;
-          addWanted(state, 0.4, 'Shot at the police');
-          state.addParticles(b.x, b.y, 5, '#ffd34d');
-          break;
-        }
-      }
-    } else {
-      // An enemy bullet vs the player.
-      const p = state.player;
-      if (dist2(b.x, b.y, p.x, p.y) < 16 * 16) {
-        b.dead = true;
-        damagePlayer(state, 12, 'a rival');
-      }
-    }
-  }
-  state.bullets = state.bullets.filter((b) => !b.dead);
-}
-
-export function missionObjectiveText(state) {
-  const m = state.missions;
-  if (!m.active) {
-    if (m.completedAll) return 'Story complete — free roam. Press M for the mission list.';
-    if (m.done.length === 0) return 'Press M to start Mission 1 — First Wheels.';
-    return 'Between jobs. Press M to start the next mission.';
-  }
-  const def = MISSION_DEFS[m.index];
-  let text = def.title;
-  if (m.target) text += `  •  ${m.target.label}`;
-  if (def.id === 'hot-delivery' && m.stage === 0) text += `  •  ${Math.max(0, Math.ceil(m.timer))}s left`;
-  if (def.id === 'bayfront-job' && m.stage === 0 && m.target) {
-    const p = state.player;
-    const px = p.inCar && p.car ? p.car.x : p.x;
-    const py = p.inCar && p.car ? p.car.y : p.y;
-    if (dist2(px, py, m.target.x, m.target.y) < 80 * 80) {
-      text += `  •  Hold up: ${Math.max(0, m.robTimer).toFixed(1)}s`;
-    }
-  }
-  return text;
 }
